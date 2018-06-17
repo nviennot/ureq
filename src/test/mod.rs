@@ -1,5 +1,5 @@
 use agent::Request;
-use agent::Stream;
+use agent::{Stream, StreamImp};
 use error::Error;
 use header::Header;
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ pub fn make_response(
     buf.append(&mut body);
     let cursor = Cursor::new(buf);
     let write: Vec<u8> = vec![];
-    Ok(Stream::Test(Box::new(cursor), write))
+    Ok(Stream::new(StreamImp::Test(Box::new(cursor), write)))
 }
 
 pub fn resolve_handler(req: &Request, url: &Url) -> Result<Stream, Error> {
