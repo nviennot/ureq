@@ -9,6 +9,7 @@ include!("request.rs");
 include!("response.rs");
 include!("conn.rs");
 include!("stream.rs");
+include!("pool.rs");
 
 /// Agents keep state between requests.
 ///

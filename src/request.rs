@@ -131,32 +131,17 @@ impl Request {
     }
 
     fn do_call(&mut self, payload: Payload) -> Response {
-        let mut state = self.state.lock().unwrap();
+        let agent = Arc::clone(&self.state);
         self.to_url()
             .and_then(|url| {
-                match state.as_mut() {
-                    None =>
-                        // create a one off pool/jar.
-                        ConnectionPool::new().connect(
-                            self,
-                            &self.method,
-                            &url,
-                            self.redirects,
-                            None,
-                            payload.into_read(),
-                        ),
-                    Some(state) => {
-                        let jar = &mut state.jar;
-                        state.pool.connect(
-                            self,
-                            &self.method,
-                            &url,
-                            self.redirects,
-                            Some(jar),
-                            payload.into_read(),
-                        )
-                    },
-                }
+                connect(
+                    self,
+                    &self.method,
+                    &url,
+                    self.redirects,
+                    payload.into_read(),
+                    agent,
+                )
             })
             .unwrap_or_else(|e| e.into())
     }

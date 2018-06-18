@@ -34,7 +34,7 @@ pub struct Response {
     index: (usize, usize), // index into status_line where we split: HTTP/1.1 200 OK
     status: u16,
     headers: Vec<Header>,
-    stream: Option<Stream>,
+    keep_alive: Option<KeepAlive>,
 }
 
 impl ::std::fmt::Debug for Response {
@@ -249,12 +249,12 @@ impl Response {
             .unwrap_or(false);
         let len = self.header("content-length")
             .and_then(|l| l.parse::<usize>().ok());
-        let reader = self.stream.expect("No reader in response?!");
+        let alive = self.keep_alive.expect("No stream in response?!");
         match is_chunked {
-            true => Box::new(chunked_transfer::Decoder::new(reader)),
+            true => Box::new(chunked_transfer::Decoder::new(alive.stream)),
             false => match len {
-                Some(len) => Box::new(LimitedRead::new(reader, len)),
-                None => Box::new(reader) as Box<Read>,
+                Some(len) => Box::new(LimitedRead::new(alive, len)),
+                None => Box::new(alive.stream) as Box<Read>,
             },
         }
     }
@@ -350,17 +350,17 @@ impl Response {
             index,
             status,
             headers,
-            stream: None,
+            keep_alive: None,
         })
     }
 
-    fn set_stream(&mut self, stream: Stream) {
-        self.stream = Some(stream);
+    fn set_keep_alive(&mut self, keep_alive: KeepAlive) {
+        self.keep_alive = Some(keep_alive);
     }
 
     #[cfg(test)]
     pub fn to_write_vec(&self) -> Vec<u8> {
-        self.stream.as_ref().unwrap().to_write_vec()
+        self.keep_alive.as_ref().unwrap().stream.to_write_vec()
     }
 }
 
@@ -396,7 +396,11 @@ impl FromStr for Response {
         let bytes = s.as_bytes().to_owned();
         let mut cursor = Cursor::new(bytes);
         let mut resp = Self::do_from_read(&mut cursor)?;
-        resp.set_stream(Stream::new(StreamImp::Cursor(cursor)));
+        resp.set_keep_alive(KeepAlive {
+            stream: Stream::new(StreamImp::Cursor(cursor)),
+            url: Url::parse("http://localhost").unwrap(),
+            agent: None,
+        });
         Ok(resp)
     }
 }
@@ -439,15 +443,15 @@ fn read_next_line<R: Read>(reader: &mut R) -> IoResult<AsciiString> {
 }
 
 struct LimitedRead {
-    reader: Stream,
+    keep_alive: Option<KeepAlive>,
     limit: usize,
     position: usize,
 }
 
 impl LimitedRead {
-    fn new(reader: Stream, limit: usize) -> Self {
+    fn new(keep_alive: KeepAlive, limit: usize) -> Self {
         LimitedRead {
-            reader,
+            keep_alive: Some(keep_alive),
             limit,
             position: 0,
         }
@@ -462,12 +466,21 @@ impl Read for LimitedRead {
         } else {
             buf
         };
-        match self.reader.read(from) {
+        match self.keep_alive.as_mut().unwrap().stream.read(from) {
             Ok(amount) => {
                 self.position += amount;
                 Ok(amount)
             }
             Err(e) => Err(e),
         }
+    }
+}
+
+impl ConnectionPoolReturn for LimitedRead {}
+
+impl Drop for LimitedRead {
+    fn drop(&mut self) {
+        let keep_alive = self.keep_alive.take();
+        self.return_to_pool(keep_alive);
     }
 }
