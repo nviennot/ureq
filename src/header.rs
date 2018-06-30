@@ -51,6 +51,22 @@ impl Header {
     pub fn is_name(&self, other: &str) -> bool {
         self.name().eq_ignore_ascii_case(other)
     }
+
+    /// Compares the given str to the value, optionally ignoring case.
+    ///
+    /// ```
+    /// let header = "Accept: text/plain"
+    ///     .parse::<ureq::Header>()
+    ///     .unwrap();
+    /// assert!(header.is_value("TEXT/PLAIN", true));
+    /// ```
+    pub fn is_value(&self, other: &str, ignore_case: bool) -> bool {
+        if ignore_case {
+            self.value().eq_ignore_ascii_case(other)
+        } else {
+            self.value() == other
+        }
+    }
 }
 
 pub fn get_header<'a, 'b>(headers: &'b Vec<Header>, name: &'a str) -> Option<&'b str> {

@@ -1,5 +1,5 @@
 use body::{send_body, Payload, SizedReader};
-use std::io::{Result as IoResult, Write};
+use std::io::{ErrorKind, Result as IoResult, Write};
 use stream::{connect_http, connect_https, connect_test, Stream};
 use url::Url;
 //
@@ -84,10 +84,10 @@ impl Unit {
         }
     }
 
-    #[cfg(test)]
     pub fn header<'a>(&self, name: &'a str) -> Option<&str> {
         get_header(&self.headers, name)
     }
+
     #[cfg(test)]
     pub fn has<'a>(&self, name: &'a str) -> bool {
         has_header(&self.headers, name)
@@ -98,25 +98,49 @@ impl Unit {
     }
 }
 
-pub fn connect(
-    mut unit: Unit,
-    method: &str,
+pub struct ConnParams {
     use_pooled: bool,
+    use_expect100: bool,
     redirects: u32,
     body: SizedReader,
-) -> Result<Response, Error> {
+}
+
+impl ConnParams {
+    pub fn new(body: SizedReader) -> Self {
+        ConnParams {
+            use_pooled: true,
+            use_expect100: true,
+            redirects: 5,
+            body,
+        }
+    }
+}
+
+pub fn connect(mut unit: Unit, method: &str, mut params: ConnParams) -> Result<Response, Error> {
     //
 
     // open socket
-    let (mut stream, is_recycled) = connect_socket(&unit, use_pooled)?;
+    let (mut stream, is_recycled) = connect_socket(&unit, params.use_pooled)?;
 
-    let send_result = send_prelude(&unit, method, &mut stream);
+    let has_expect100 = unit
+        .header("expect")
+        .map(|v| v.eq_ignore_ascii_case("100-continue"))
+        .unwrap_or(false);
+
+    let send_expect100 = params.use_expect100 && has_expect100;
+
+    let send_result = send_prelude(&unit, method, send_expect100, &mut stream);
+
+    if send_expect100 {
+        do_expect100(&unit, &mut stream)?;
+    }
 
     if send_result.is_err() {
         if is_recycled {
             // we try open a new connection, this time there will be
             // no connection in the pool. don't use it.
-            return connect(unit, method, false, redirects, body);
+            params.use_pooled = false;
+            return connect(unit, method, params);
         } else {
             // not a pooled connection, propagate the error.
             return Err(send_result.unwrap_err().into());
@@ -131,7 +155,7 @@ pub fn connect(
 
     // handle redirects
     if resp.redirect() {
-        if redirects == 0 {
+        if params.redirects == 0 {
             return Err(Error::TooManyRedirects);
         }
 
@@ -150,17 +174,21 @@ pub fn connect(
             // perform the redirect differently depending on 3xx code.
             return match resp.status() {
                 301 | 302 | 303 => {
-                    send_body(body, unit.is_chunked, &mut stream)?;
-                    let empty = Payload::Empty.into_read();
-                    connect(unit, "GET", use_pooled, redirects - 1, empty)
+                    send_body(params.body, unit.is_chunked, &mut stream)?;
+                    params.body = Payload::Empty.into_read();
+                    params.redirects -= 1;
+                    connect(unit, "GET", params)
                 }
-                307 | 308 | _ => connect(unit, method, use_pooled, redirects - 1, body),
+                307 | 308 | _ => {
+                    params.redirects -= 1;
+                    connect(unit, method, params)
+                }
             };
         }
     }
 
     // send the body (which can be empty now depending on redirects)
-    send_body(body, unit.is_chunked, &mut stream)?;
+    send_body(params.body, unit.is_chunked, &mut stream)?;
 
     // since it is not a redirect, give away the incoming stream to the response object
     response::set_stream(&mut resp, Some(unit), stream);
@@ -229,8 +257,15 @@ fn connect_socket(unit: &Unit, use_pooled: bool) -> Result<(Stream, bool), Error
     Ok((stream?, false))
 }
 
-fn send_prelude(unit: &Unit, method: &str, stream: &mut Stream) -> IoResult<()> {
-    // send the request start + headers
+/// send the request start + headers
+fn send_prelude(
+    unit: &Unit,
+    method: &str,
+    use_expect100: bool,
+    stream: &mut Stream,
+) -> IoResult<()> {
+    //
+
     let mut prelude: Vec<u8> = vec![];
     write!(
         prelude,
@@ -243,11 +278,48 @@ fn send_prelude(unit: &Unit, method: &str, stream: &mut Stream) -> IoResult<()> 
         write!(prelude, "Host: {}\r\n", unit.url.host().unwrap())?;
     }
     for header in &unit.headers {
+        if !use_expect100 && header.is_name("expect") && header.is_value("100-continue", true) {
+            continue;
+        }
         write!(prelude, "{}: {}\r\n", header.name(), header.value())?;
     }
     write!(prelude, "\r\n")?;
 
     stream.write_all(&mut prelude[..])?;
+
+    Ok(())
+}
+
+fn do_expect100(unit: &Unit, stream: &mut Stream) -> IoResult<()> {
+    // we have sent the expect100 header. now we must read to get the 100 response
+    // however, if the server doesn't do it, we must timeout and continue as if
+    // it doesn't happen.
+    stream.set_read_timeout(1000);
+
+    // HTTP/1.1 100 Continue\r\n
+    let mut buf = vec![0_u8; 12]; // HTTP/1.1 100
+    let status = stream.read_exact(&mut buf);
+
+    match status {
+        Ok(_) => {
+            // read to eof (\r\n)
+            let mut discard = vec![];
+            stream.read_to_end(&mut discard)?;
+        }
+        Err(err) => {
+            match err.kind() {
+                ErrorKind::WouldBlock | ErrorKind::TimedOut => {
+                    // the read for 100 continue timed out. this means the server doesn't
+                    // support it, and we continue as "normal".
+                }
+                // abort with error
+                _ => return Err(err),
+            }
+        }
+    }
+
+    // reset it back to user default.
+    stream.set_read_timeout(unit.timeout_read);
 
     Ok(())
 }

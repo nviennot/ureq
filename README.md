@@ -62,10 +62,10 @@ dependencies, this library might change.
 
 ## TODO
 
+- [x] Connection reuse/keep-alive with pool
+- [ ] Expect 100-continue
 - [ ] Forms with application/x-www-form-urlencoded
 - [ ] multipart/form-data
-- [ ] Connection reuse/keep-alive with pool
-- [ ] Expect 100-continue
 - [ ] Use `rustls` when ring v0.13 is released.
 
 ## License (MIT)

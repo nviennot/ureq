@@ -94,9 +94,10 @@ impl Request {
     fn do_call(&mut self, payload: Payload) -> Response {
         self.to_url()
             .and_then(|url| {
-                let reader = payload.into_read();
-                let unit = Unit::new(&self, &url, &reader);
-                connect(unit, &self.method, true, self.redirects, reader)
+                let body = payload.into_read();
+                let unit = Unit::new(&self, &url, &body);
+                let params = ConnParams::new(body);
+                connect(unit, &self.method, params)
             })
             .unwrap_or_else(|e| e.into())
     }

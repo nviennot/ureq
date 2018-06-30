@@ -43,6 +43,20 @@ impl Stream {
         }
     }
 
+    pub fn set_read_timeout(&mut self, t: u64) {
+        let stream = match self {
+            Stream::Http(stream) => stream,
+            Stream::Https(tls) => tls.get_mut(),
+            _ => return,
+        };
+        let v = if t == 0 {
+            None
+        } else {
+            Some(Duration::from_millis(t))
+        };
+        stream.set_read_timeout(v).ok();
+    }
+
     #[cfg(test)]
     pub fn to_write_vec(&self) -> Vec<u8> {
         match self {
