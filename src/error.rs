@@ -1,96 +1,75 @@
 use std::fmt;
-use std::io::Error as IoError;
+use std::io;
+use std::string::FromUtf8Error;
 
-/// Errors that are translated to ["synthetic" responses](struct.Response.html#method.synthetic).
+#[cfg(feature = "tls")]
+use tls_api::Error as TlsError;
+
 #[derive(Debug)]
 pub enum Error {
-    /// The url could not be understood. Synthetic error `400`.
-    BadUrl(String),
-    /// The url scheme could not be understood. Synthetic error `400`.
-    UnknownScheme(String),
-    /// DNS lookup failed. Synthetic error `400`.
-    DnsFailed(String),
-    /// Connection to server failed. Synthetic error `500`.
-    ConnectionFailed(String),
-    /// Too many redirects. Synthetic error `500`.
-    TooManyRedirects,
-    /// We fail to read the status line. This happens for pooled connections when
-    /// TLS fails and we don't notice until trying to read.
-    BadStatusRead,
-    /// A status line we don't understand `HTTP/1.1 200 OK`. Synthetic error `500`.
-    BadStatus,
-    /// A header line that couldn't be parsed. Synthetic error `500`.
-    BadHeader,
-    /// Some unspecified `std::io::Error`. Synthetic error `500`.
-    Io(IoError),
-}
-
-impl Error {
-    // If the error is bad status read, which might happen if a TLS connections is
-    // closed and we only discover it when trying to read the status line from it.
-    pub(crate) fn is_bad_status_read(&self) -> bool {
-        match self {
-            Error::BadStatusRead => true,
-            _ => false,
-        }
-    }
-
-    /// For synthetic responses, this is the error code.
-    pub fn status(&self) -> u16 {
-        match self {
-            Error::BadUrl(_) => 400,
-            Error::UnknownScheme(_) => 400,
-            Error::DnsFailed(_) => 400,
-            Error::ConnectionFailed(_) => 500,
-            Error::TooManyRedirects => 500,
-            Error::BadStatusRead => 500,
-            Error::BadStatus => 500,
-            Error::BadHeader => 500,
-            Error::Io(_) => 500,
-        }
-    }
-
-    /// For synthetic responses, this is the status text.
-    pub fn status_text(&self) -> &str {
-        match self {
-            Error::BadUrl(_) => "Bad URL",
-            Error::UnknownScheme(_) => "Unknown Scheme",
-            Error::DnsFailed(_) => "Dns Failed",
-            Error::ConnectionFailed(_) => "Connection Failed",
-            Error::TooManyRedirects => "Too Many Redirects",
-            Error::BadStatusRead => "Failed to read status line",
-            Error::BadStatus => "Bad Status",
-            Error::BadHeader => "Bad Header",
-            Error::Io(_) => "Network Error",
-        }
-    }
-
-    /// For synthetic responses, this is the body text.
-    pub fn body_text(&self) -> String {
-        match self {
-            Error::BadUrl(url) => format!("Bad URL: {}", url),
-            Error::UnknownScheme(scheme) => format!("Unknown Scheme: {}", scheme),
-            Error::DnsFailed(err) => format!("Dns Failed: {}", err),
-            Error::ConnectionFailed(err) => format!("Connection Failed: {}", err),
-            Error::TooManyRedirects => "Too Many Redirects".to_string(),
-            Error::BadStatusRead => "Failed to read status line".to_string(),
-            Error::BadStatus => "Bad Status".to_string(),
-            Error::BadHeader => "Bad Header".to_string(),
-            Error::Io(ioe) => format!("Network Error: {}", ioe),
-        }
-    }
-}
-
-impl From<IoError> for Error {
-    fn from(err: IoError) -> Error {
-        Error::Io(err)
-    }
+    Message(String),
+    Static(&'static str),
+    Io(io::Error),
+    #[cfg(feature = "tls")]
+    TlsError(tls_api::Error),
+    H2(h2::Error),
+    Http11Parser(httparse::Error),
+    HttpApi(http::Error),
+    FromUtf8(FromUtf8Error),
 }
 
 impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.body_text())
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:?}", self)
     }
 }
 
 impl std::error::Error for Error {}
+
+impl From<String> for Error {
+    fn from(s: String) -> Self {
+        Error::Message(s)
+    }
+}
+
+impl<'a> From<&'a str> for Error {
+    fn from(s: &'a str) -> Self {
+        Error::Message(s.to_owned())
+    }
+}
+impl From<io::Error> for Error {
+    fn from(e: io::Error) -> Self {
+        Error::Io(e)
+    }
+}
+
+#[cfg(feature = "tls")]
+impl From<TlsError> for Error {
+    fn from(e: TlsError) -> Self {
+        Error::TlsError(e)
+    }
+}
+
+impl From<h2::Error> for Error {
+    fn from(e: h2::Error) -> Self {
+        Error::H2(e)
+    }
+}
+
+impl From<httparse::Error> for Error {
+    fn from(e: httparse::Error) -> Self {
+        Error::Http11Parser(e)
+    }
+}
+
+impl From<http::Error> for Error {
+    fn from(e: http::Error) -> Self {
+        Error::HttpApi(e)
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(e: FromUtf8Error) -> Self {
+        Error::FromUtf8(e)
+    }
+}

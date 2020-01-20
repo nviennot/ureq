@@ -2,6 +2,8 @@
 
 ![](https://github.com/algesten/ureq/workflows/CI/badge.svg)
 
+# FUTURE DIRECTION BRANCH. NOT USEFUL
+
 > Minimal request library in rust.
 
 ## Usage

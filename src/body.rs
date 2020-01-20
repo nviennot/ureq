@@ -1,117 +1,222 @@
-use crate::stream::Stream;
-use chunked_transfer;
-use std::io::{copy, empty, Cursor, Read, Result as IoResult};
+use crate::chunked::ChunkedDecoder;
+use crate::conn::ProtocolImpl;
+use crate::limit::LimitRead;
+use crate::peek::Peekable;
+use crate::AsyncImpl;
+use crate::Connection;
+use crate::Error;
+use crate::Stream;
+use crate::{AsyncRead, AsyncReadExt};
+use bytes::Bytes;
+use h2::client::SendRequest;
+use h2::RecvStream;
+use std::io;
 
-#[cfg(feature = "charset")]
-use crate::response::DEFAULT_CHARACTER_SET;
-#[cfg(feature = "charset")]
-use encoding::label::encoding_from_whatwg_label;
-#[cfg(feature = "charset")]
-use encoding::EncoderTrap;
+const BUF_SIZE: usize = 16_384;
 
-#[cfg(feature = "json")]
-use super::SerdeValue;
-#[cfg(feature = "json")]
-use serde_json;
-
-/// The different kinds of bodies to send.
-///
-/// *Internal API*
-pub(crate) enum Payload {
-    Empty,
-    Text(String, String),
-    #[cfg(feature = "json")]
-    JSON(SerdeValue),
-    Reader(Box<dyn Read + 'static>),
-    Bytes(Vec<u8>),
+pub struct Body {
+    inner: BodyImpl,
+    leftovers: Option<Bytes>,
+    is_finished: bool,
 }
 
-impl ::std::fmt::Debug for Payload {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::result::Result<(), ::std::fmt::Error> {
-        match self {
-            Payload::Empty => write!(f, "Empty"),
-            Payload::Text(t, _) => write!(f, "{}", t),
-            #[cfg(feature = "json")]
-            Payload::JSON(_) => write!(f, "JSON"),
-            Payload::Reader(_) => write!(f, "Reader"),
-            Payload::Bytes(v) => write!(f, "{:?}", v),
+pub enum BodyImpl {
+    RequestEmpty,
+    RequestAsyncRead(Box<dyn AsyncRead + Unpin>),
+    RequestRead(Box<dyn io::Read>),
+    Http11Chunked(ChunkedDecoder),
+    Http11Limited(LimitRead),
+    Http11Unlimited(Peekable<Box<dyn Stream>>),
+    Http2(RecvStream, SendRequest<Bytes>),
+}
+
+impl Body {
+    pub fn empty() -> Self {
+        Self::new(BodyImpl::RequestEmpty)
+    }
+    pub fn from_async_read<R: AsyncRead + Unpin + 'static>(reader: R) -> Self {
+        Self::new(BodyImpl::RequestAsyncRead(Box::new(reader)))
+    }
+    pub fn from_sync_read<R: io::Read + 'static>(reader: R) -> Self {
+        Self::new(BodyImpl::RequestRead(Box::new(reader)))
+    }
+    pub(crate) fn new(inner: BodyImpl) -> Self {
+        Body {
+            inner,
+            leftovers: None,
+            is_finished: false,
         }
     }
-}
 
-impl Default for Payload {
-    fn default() -> Payload {
-        Payload::Empty
-    }
-}
+    pub async fn into_connection(mut self) -> Result<Connection, Error> {
+        // http11 reuses the same connection, and we can't leave the body
+        // half way through read.
+        if self.is_http11() && !self.is_finished {
+            self.read_to_end().await?;
+        }
 
-/// Payloads are turned into this type where we can hold both a size and the reader.
-///
-/// *Internal API*
-pub(crate) struct SizedReader {
-    pub size: Option<usize>,
-    pub reader: Box<dyn Read + 'static>,
-}
-
-impl ::std::fmt::Debug for SizedReader {
-    fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::result::Result<(), ::std::fmt::Error> {
-        write!(f, "SizedReader[size={:?},reader]", self.size)
-    }
-}
-
-impl SizedReader {
-    fn new(size: Option<usize>, reader: Box<dyn Read + 'static>) -> Self {
-        SizedReader { size, reader }
-    }
-}
-
-impl Payload {
-    pub fn into_read(self) -> SizedReader {
-        match self {
-            Payload::Empty => SizedReader::new(None, Box::new(empty())),
-            Payload::Text(text, _charset) => {
-                #[cfg(feature = "charset")]
-                let bytes = {
-                    let encoding = encoding_from_whatwg_label(&_charset)
-                        .or_else(|| encoding_from_whatwg_label(DEFAULT_CHARACTER_SET))
-                        .unwrap();
-                    encoding.encode(&text, EncoderTrap::Replace).unwrap()
-                };
-                #[cfg(not(feature = "charset"))]
-                let bytes = text.into_bytes();
-                let len = bytes.len();
-                let cursor = Cursor::new(bytes);
-                SizedReader::new(Some(len), Box::new(cursor))
+        let conn = match self.inner {
+            BodyImpl::Http11Chunked(decoder) => {
+                Connection::new(ProtocolImpl::Http11(decoder.into_inner()))
             }
-            #[cfg(feature = "json")]
-            Payload::JSON(v) => {
-                let bytes = serde_json::to_vec(&v).expect("Bad JSON in payload");
-                let len = bytes.len();
-                let cursor = Cursor::new(bytes);
-                SizedReader::new(Some(len), Box::new(cursor))
+            BodyImpl::Http11Limited(limiter) => {
+                Connection::new(ProtocolImpl::Http11(limiter.into_inner()))
             }
-            Payload::Reader(read) => SizedReader::new(None, read),
-            Payload::Bytes(bytes) => {
-                let len = bytes.len();
-                let cursor = Cursor::new(bytes);
-                SizedReader::new(Some(len), Box::new(cursor))
-            }
+            BodyImpl::Http11Unlimited(_) => Connection::new(ProtocolImpl::Unusable {
+                reason: "Previous response did not contain a content-length header.",
+            }),
+            BodyImpl::Http2(_, h2) => Connection::new(ProtocolImpl::Http2(h2)),
+            _ => return Err(Error::Static("Can't do into_connection() on request body")),
+        };
+
+        Ok(conn)
+    }
+
+    fn is_http11(&self) -> bool {
+        match &self.inner {
+            BodyImpl::Http11Chunked(_) => true,
+            BodyImpl::Http11Limited(_) => true,
+            BodyImpl::Http11Unlimited(_) => true,
+            _ => false,
         }
     }
+
+    async fn read_to_end(&mut self) -> Result<(), Error> {
+        let mut buf = vec![0_u8; BUF_SIZE];
+        loop {
+            let read = self.read(&mut buf).await?;
+            if read == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        assert!(!buf.is_empty(), "Can't read with an empty buf");
+        if self.is_finished || buf.is_empty() {
+            return Ok(0);
+        }
+        // h2 streams might have leftovers to use up before reading any more.
+        if let Some(data) = self.leftovers.take() {
+            let amount = self.bytes_to_buf(data, buf);
+            return Ok(amount);
+        }
+        let read = match &mut self.inner {
+            BodyImpl::RequestEmpty => 0,
+            BodyImpl::RequestAsyncRead(reader) => reader.read(buf).await?,
+            BodyImpl::RequestRead(reader) => reader.read(buf)?,
+            BodyImpl::Http11Chunked(decoder) => decoder.read_chunk(buf).await?,
+            BodyImpl::Http11Limited(limiter) => limiter.read(buf).await?,
+            BodyImpl::Http11Unlimited(stream) => stream.read(buf).await?,
+            BodyImpl::Http2(recv, _) => {
+                if let Some(data) = recv.data().await {
+                    let data = data?;
+                    self.bytes_to_buf(data, buf)
+                } else {
+                    0
+                }
+            }
+        };
+        if read == 0 {
+            self.is_finished = true;
+        }
+        Ok(read)
+    }
+
+    pub fn read_sync(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        let fut = self.read(buf);
+        Ok(AsyncImpl::run_until(fut)?)
+    }
+
+    // helper to shuffle Bytes into a &[u8] and handle the remains.
+    fn bytes_to_buf(&mut self, mut data: Bytes, buf: &mut [u8]) -> usize {
+        let max = data.len().min(buf.len());
+        (&mut buf[0..max]).copy_from_slice(&data[0..max]);
+        let remain = if max < data.len() {
+            Some(data.split_off(max))
+        } else {
+            None
+        };
+        self.leftovers = remain;
+        max
+    }
+
+    pub async fn as_vec(&mut self, max: usize) -> Result<Vec<u8>, Error> {
+        let mut vec = Vec::new();
+        let mut total_read = 0;
+        loop {
+            let remaining_reserved = vec.len() - total_read;
+            if remaining_reserved < 128 {
+                if vec.len() == max {
+                    // we can't grow vec any more
+                    return Err(Error::Message(format!("Reached max to read: {}", max)));
+                }
+                // reserve more space, but only up to max
+                let reserve_to_size = (vec.len() + BUF_SIZE).min(max);
+                vec.resize(reserve_to_size, 0);
+            }
+            let amount = self.read(&mut vec[total_read..]).await?;
+            if amount == 0 {
+                break;
+            }
+            total_read += amount;
+        }
+        // size down if we reserved too much
+        vec.resize(total_read, 0);
+        Ok(vec)
+    }
+
+    pub fn as_vec_sync(&mut self, max: usize) -> Result<Vec<u8>, Error> {
+        let fut = self.as_vec(max);
+        Ok(AsyncImpl::run_until(fut)?)
+    }
+
+    pub async fn as_string(&mut self, max: usize) -> Result<String, Error> {
+        let bytes = self.as_vec(max).await?;
+        Ok(String::from_utf8_lossy(&bytes).to_string())
+    }
+
+    pub fn as_string_sync(&mut self, max: usize) -> Result<String, Error> {
+        let fut = self.as_string(max);
+        Ok(AsyncImpl::run_until(fut)?)
+    }
 }
 
-/// Helper to send a body, either as chunked or not.
-pub(crate) fn send_body(
-    mut body: SizedReader,
-    do_chunk: bool,
-    stream: &mut Stream,
-) -> IoResult<u64> {
-    let n = if do_chunk {
-        let mut chunker = chunked_transfer::Encoder::new(stream);
-        copy(&mut body.reader, &mut chunker)?
-    } else {
-        copy(&mut body.reader, stream)?
-    };
+impl From<()> for Body {
+    fn from(_: ()) -> Self {
+        Body::empty()
+    }
+}
 
-    Ok(n)
+impl<'a> From<&'a str> for Body {
+    fn from(s: &'a str) -> Self {
+        s.to_owned().into()
+    }
+}
+
+impl<'a> From<&'a String> for Body {
+    fn from(s: &'a String) -> Self {
+        s.clone().into()
+    }
+}
+
+impl From<String> for Body {
+    fn from(s: String) -> Self {
+        let bytes = s.into_bytes();
+        bytes.into()
+    }
+}
+
+impl<'a> From<&'a [u8]> for Body {
+    fn from(bytes: &'a [u8]) -> Self {
+        bytes.to_vec().into()
+    }
+}
+
+impl From<Vec<u8>> for Body {
+    fn from(bytes: Vec<u8>) -> Self {
+        let cursor = io::Cursor::new(bytes);
+        Body::from_sync_read(cursor)
+    }
 }
