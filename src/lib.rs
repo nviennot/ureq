@@ -64,6 +64,7 @@ use crate::conn::ProtocolImpl;
 use crate::either::Either;
 use crate::peek::Peekable;
 use crate::proto::Protocol;
+pub use crate::req_ext::RequestBuilderExt;
 use crate::tokio::to_tokio;
 
 #[cfg(feature = "tls")]
@@ -148,18 +149,23 @@ pub async fn connect_stream(stream: impl Stream, proto: Protocol) -> Result<Conn
 mod test {
     use super::sync::*;
     use super::Body;
+    use super::Error;
+    use super::RequestBuilderExt;
     use tls_api_rustls::TlsConnector;
 
     #[test]
-    fn test_add() {
+    fn test_add() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("https://www.google.com/")
+            .query("foo", "bar")?
+            .query("pooch", "bear")?
             .body(Body::empty())
             .expect("Build");
-        let conn = connect::<TlsConnector, _>(&req).unwrap();
-        let res = conn.send_request(req).expect("Unwrap response");
+        let conn = connect::<TlsConnector, _>(&req)?;
+        let res = conn.send_request(req)?;
         let (_, mut body) = res.into_parts();
-        let body_s = body.as_string_sync(1024 * 1024).expect("Unwrap body");
+        let body_s = body.as_string_sync(1024 * 1024)?;
         println!("{}", body_s);
+        Ok(())
     }
 }

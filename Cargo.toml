@@ -28,11 +28,12 @@ bytes = "*"
 cookie = "*"
 futures-io = { version = "0.3" }
 futures-util = { version = "0.3", features=["io"] }
-h2 = { path = "../h2" }
+h2 = "*"
 http = "*"
 httparse = "*"
 log = "*"
 once_cell = "*"
+qstring = "*"
 
 async-std = { version = "*", optional = true }
 tls-api = { version = "*", optional = true }
