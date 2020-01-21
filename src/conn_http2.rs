@@ -12,17 +12,12 @@ pub async fn send_request_http2(
     //
     let send_req_clone = send_req.clone();
 
-    println!("-- wait for h2.ready()");
     let mut h2 = send_req.ready().await?;
 
     let (parts, mut body_read) = req.into_parts();
     let req = http::Request::from_parts(parts, ());
 
-    println!("-- h2.send_request()");
-
     let (fut_res, mut send_body) = h2.send_request(req, false)?;
-
-    println!("-- h2 send body");
 
     let mut buf = vec![0_u8; BUF_SIZE];
     loop {
@@ -51,11 +46,7 @@ pub async fn send_request_http2(
     // Send end_of_stream
     send_body.send_data(Bytes::new(), true)?;
 
-    println!("-- h2 body sent, wait for response future");
-
     let (parts, res_body) = fut_res.await?.into_parts();
-
-    println!("-- h2 got response");
 
     let res_body = Body::new(BodyImpl::Http2(res_body, send_req_clone));
     let res = http::Response::from_parts(parts, res_body);

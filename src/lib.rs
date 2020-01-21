@@ -20,6 +20,10 @@
 //! * Connection pooling
 //! * Cookie state in connection (cookie)
 //! * HTTP Proxy
+//!
+
+#[macro_use]
+extern crate log;
 
 mod async_impl;
 mod body;
@@ -27,11 +31,11 @@ mod chunked;
 mod conn;
 mod conn_http11;
 mod conn_http2;
+mod dlog;
 mod either;
 mod error;
 mod http11;
 mod limit;
-mod log;
 mod peek;
 mod proto;
 mod req_ext;
@@ -86,9 +90,7 @@ pub async fn connect_uri<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connectio
 
     let (stream, alpn_proto) = {
         // "raw" tcp
-        println!("before connect_tcp");
         let tcp = AsyncImpl::connect_tcp(&addr).await?;
-        println!("after connect_tcp");
 
         if hostport.is_tls() {
             // wrap in tls
@@ -130,7 +132,8 @@ pub async fn connect_stream(stream: impl Stream, proto: Protocol) -> Result<Conn
         // drives the connection independently of the h2 api surface.
         AsyncImpl::spawn(async {
             if let Err(err) = h2conn.await {
-                println!("Error in connection: {:?}", err);
+                // this is expected to happen when the connection disconnects
+                trace!("Error in connection: {:?}", err);
             }
         });
         Ok(Connection::new(ProtocolImpl::Http2(h2)))
@@ -153,13 +156,10 @@ mod test {
             .uri("https://www.google.com/")
             .body(Body::empty())
             .expect("Build");
-        println!("*** CONNECT ***");
         let conn = connect::<TlsConnector, _>(&req).unwrap();
-        println!("*** SEND_REQUEST ***");
         let res = conn.send_request(req).expect("Unwrap response");
         let (_, mut body) = res.into_parts();
-        println!("*** READ RESPONSE ***");
         let body_s = body.as_string_sync(1024 * 1024).expect("Unwrap body");
-        println!("Body: {}", body_s);
+        println!("{}", body_s);
     }
 }

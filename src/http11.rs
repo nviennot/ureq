@@ -1,6 +1,5 @@
 use crate::Error;
 use crate::{AsyncWrite, AsyncWriteExt};
-use log::{debug, log_enabled, trace, Level};
 use std::io;
 use std::io::Write;
 
@@ -44,7 +43,7 @@ pub async fn write_http11_req<Write: AsyncWrite + Unpin, X>(
 
     // write buffer to connection
     let buf = w.into_inner();
-    if log_enabled!(Level::Debug) {
+    if log_enabled!(log::Level::Debug) {
         debug!(
             "write_http11_req: {:?}",
             String::from_utf8_lossy(&buf[0..len])
@@ -55,7 +54,7 @@ pub async fn write_http11_req<Write: AsyncWrite + Unpin, X>(
     Ok(len)
 }
 pub fn try_parse_http11(buf: &[u8]) -> Result<Option<(http::Response<()>, usize)>, Error> {
-    if log_enabled!(Level::Trace) {
+    if log_enabled!(log::Level::Trace) {
         trace!("try_parse_http11: {:?}", String::from_utf8_lossy(buf));
     }
 
@@ -88,7 +87,6 @@ pub fn try_parse_http11(buf: &[u8]) -> Result<Option<(http::Response<()>, usize)
     }
 
     let built = bld.body(())?;
-    println!("Unwrapping status {:?}", status);
     let len = status.unwrap();
 
     debug!("try_parse_http11 success: {:?}", built);

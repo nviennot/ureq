@@ -30,7 +30,7 @@ use tls_api::TlsConnector;
 
 #[cfg(feature = "tls")]
 pub fn connect<Tls: TlsConnector, X>(req: &http::Request<X>) -> Result<Connection, Error> {
-    crate::log::set_logger();
+    crate::dlog::set_logger();
     let fut = crate::connect::<Tls, X>(req);
     Ok(Connection(AsyncImpl::run_until(fut)?))
 }

@@ -22,13 +22,10 @@ pub async fn wrap_tls<C: TlsConnector, S: Stream>(
 
     let connector = builder.build().expect("TlsConnector");
 
-    println!("before tls connect");
     let tls_stream = connector.connect(domain, to_tokio(stream)).await?;
 
     let alpn = tls_stream.get_alpn_protocol();
     let proto = Protocol::from_alpn(&alpn);
-
-    println!("after tls connect: {:?}", proto);
 
     Ok((from_tokio(tls_stream), proto))
 }
