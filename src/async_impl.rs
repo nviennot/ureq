@@ -4,26 +4,26 @@ use std::future::Future;
 
 pub struct AsyncImpl;
 
-#[cfg(feature = "std")]
-impl Stream for async_std::net::TcpStream {}
+#[cfg(feature = "async-std")]
+impl Stream for async_std_lib::net::TcpStream {}
 
-#[cfg(feature = "std")]
+#[cfg(feature = "async-std")]
 impl AsyncImpl {
     pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
-        Ok(async_std::net::TcpStream::connect(addr).await?)
+        Ok(async_std_lib::net::TcpStream::connect(addr).await?)
     }
 
     pub fn spawn<T>(task: T)
     where
         T: Future + Send + 'static,
     {
-        async_std::task::spawn(async move {
+        async_std_lib::task::spawn(async move {
             task.await;
         });
     }
 
     pub fn run_until<F: Future>(future: F) -> F::Output {
-        async_std::task::block_on(future)
+        async_std_lib::task::block_on(future)
     }
 }
 

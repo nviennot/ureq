@@ -7,7 +7,11 @@ use std::task::{Context, Poll};
 use tls_api::Result;
 use tls_api::TlsStream;
 
+#[cfg(feature = "tokio")]
 use tokio_exe::io::{AsyncRead, AsyncWrite};
+
+#[cfg(feature = "async-std")]
+use tokio_min::io::{AsyncRead, AsyncWrite};
 
 pub struct TlsConnectorBuilder(PassThrough);
 pub struct TlsConnector(PassThrough);
