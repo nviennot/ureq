@@ -40,20 +40,15 @@ mod peek;
 mod proto;
 mod req_ext;
 mod tls;
-mod tls_api_pass;
+mod tls_pass;
 mod tokio;
 mod uri;
-
-pub use http;
 
 pub use crate::error::Error;
 pub(crate) use futures_io::{AsyncRead, AsyncWrite};
 pub(crate) use futures_util::io::{AsyncReadExt, AsyncWriteExt};
-
+pub use http;
 pub(crate) const PARSE_BUF_SIZE: usize = 16_384;
-
-pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
-impl Stream for Box<dyn Stream> {}
 
 use crate::async_impl::AsyncImpl;
 pub use crate::body::Body;
@@ -63,11 +58,13 @@ use crate::either::Either;
 use crate::peek::Peekable;
 use crate::proto::Protocol;
 pub use crate::req_ext::{RequestBuilderExt, RequestExt};
+use crate::tls::wrap_tls;
 use crate::tokio::to_tokio;
-
-pub use crate::tls::wrap_tls;
-
 use tls_api::TlsConnector;
+pub use tls_pass::TlsConnector as PassTlsConnector;
+
+pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
+impl Stream for Box<dyn Stream> {}
 
 pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
     crate::dlog::set_logger();
@@ -122,7 +119,6 @@ pub fn open_stream_sync(stream: impl Stream, proto: Protocol) -> Result<Connecti
 
 #[cfg(test)]
 mod test {
-    use super::tls_api_pass::TlsConnector as PassTlsConnector;
     use super::*;
     use tls_api_rustls::TlsConnector as RustlsTlsConnector;
 
