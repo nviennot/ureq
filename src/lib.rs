@@ -39,7 +39,6 @@ mod limit;
 mod peek;
 mod proto;
 mod req_ext;
-pub mod sync;
 mod tokio;
 mod uri;
 
@@ -145,12 +144,33 @@ pub async fn connect_stream(stream: impl Stream, proto: Protocol) -> Result<Conn
     }
 }
 
+#[cfg(feature = "tls")]
+pub fn connect_sync<Tls: TlsConnector, X>(req: &http::Request<X>) -> Result<Connection, Error> {
+    crate::dlog::set_logger();
+    let fut = connect::<Tls, X>(req);
+    Ok(AsyncImpl::run_until(fut)?)
+}
+
+#[cfg(feature = "tls")]
+pub fn connect_uri_sync<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
+    let fut = crate::connect_uri::<Tls>(uri);
+    Ok(AsyncImpl::run_until(fut)?)
+}
+
+#[cfg(not(feature = "tls"))]
+pub fn connect_uri_sync(uri: &http::Uri) -> Result<Connection, Error> {
+    let fut = crate::connect_uri(uri);
+    Ok(Connection(AsyncImpl::run_until(fut)?))
+}
+
+pub fn connect_stream_sync(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
+    let fut = crate::connect_stream(stream, proto);
+    Ok(AsyncImpl::run_until(fut)?)
+}
+
 #[cfg(test)]
 mod test {
-    use super::sync::*;
-    use super::Body;
-    use super::Error;
-    use super::RequestBuilderExt;
+    use super::*;
     use tls_api_rustls::TlsConnector;
 
     #[test]
@@ -161,8 +181,8 @@ mod test {
             .query("pooch", "bear")?
             .body(Body::empty())
             .expect("Build");
-        let conn = connect::<TlsConnector, _>(&req)?;
-        let res = conn.send_request(req)?;
+        let conn = connect_sync::<TlsConnector, _>(&req)?;
+        let res = conn.send_request_sync(req)?;
         let (_, mut body) = res.into_parts();
         let body_s = body.as_string_sync(1024 * 1024)?;
         println!("{}", body_s);

@@ -1,6 +1,7 @@
 use crate::conn_http11::{read_response_http11, response_body_http11, send_request_http11};
 use crate::conn_http2::send_request_http2;
 use crate::peek::Peekable;
+use crate::AsyncImpl;
 use crate::Body;
 use crate::Error;
 use crate::Stream;
@@ -64,5 +65,13 @@ impl Connection {
                 reason
             ))),
         }
+    }
+
+    pub fn send_request_sync(
+        self,
+        req: http::Request<Body>,
+    ) -> Result<http::Response<Body>, Error> {
+        let fut = self.send_request(req);
+        AsyncImpl::run_until(fut)
     }
 }
