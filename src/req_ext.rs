@@ -1,4 +1,3 @@
-use crate::async_impl::AsyncImpl;
 use crate::Body;
 use async_trait::async_trait;
 use http::request;
@@ -68,18 +67,11 @@ impl RequestBuilderExt for request::Builder {
 pub trait RequestExt {
     /// Signature: `async fn send(self) -> Response<Body>`
     async fn send(self) -> Response<Body>;
-
-    fn send_sync(self) -> Response<Body>;
 }
 
 #[async_trait]
 impl RequestExt for Request<Body> {
     //
-    fn send_sync(self) -> Response<Body> {
-        let fut = self.send();
-        AsyncImpl::run_until(fut)
-    }
-
     async fn send(self) -> Response<Body> {
         //
         unimplemented!()

@@ -28,7 +28,7 @@ pub(crate) use futures_util::io::{AsyncReadExt, AsyncWriteExt};
 pub use http;
 pub(crate) const PARSE_BUF_SIZE: usize = 16_384;
 
-use crate::async_impl::AsyncImpl;
+use crate::async_impl::exec::AsyncImpl;
 pub use crate::body::Body;
 pub use crate::conn::Connection;
 use crate::conn::ProtocolImpl;
@@ -38,6 +38,7 @@ use crate::proto::Protocol;
 pub use crate::req_ext::{RequestBuilderExt, RequestExt};
 use crate::tls::wrap_tls;
 use crate::tokio::to_tokio;
+use std::future::Future;
 use tls_api::TlsConnector;
 pub use tls_pass::TlsConnector as PassTlsConnector;
 
@@ -67,11 +68,6 @@ pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, E
     Ok(open_stream(stream, alpn_proto).await?)
 }
 
-pub fn connect_sync<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
-    let fut = connect::<Tls>(uri);
-    Ok(AsyncImpl::run_until(fut)?)
-}
-
 pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
     if proto == Protocol::Http2 {
         let (h2, h2conn) = h2::client::handshake(to_tokio(stream)).await?;
@@ -90,9 +86,8 @@ pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connect
     }
 }
 
-pub fn open_stream_sync(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
-    let fut = open_stream(stream, proto);
-    Ok(AsyncImpl::run_until(fut)?)
+pub fn block_on<Ret, Fut: Future<Output = Ret>>(f: Fut) -> Ret {
+    AsyncImpl::block_on(f)
 }
 
 #[cfg(test)]
@@ -106,10 +101,12 @@ mod test {
             .uri("https://www.google.com/")
             .body(Body::empty())
             .expect("Build");
-        let conn = connect_sync::<RustlsTlsConnector>(req.uri())?;
-        let res = conn.send_request_sync(req)?;
-        let (_, mut body) = res.into_parts();
-        let body_s = body.as_string_sync(1024 * 1024)?;
+        let body_s = block_on(async {
+            let conn = connect::<RustlsTlsConnector>(req.uri()).await?;
+            let res = conn.send_request(req).await?;
+            let (_, mut body) = res.into_parts();
+            body.as_string(1024 * 1024).await
+        })?;
         println!("{}", body_s);
         Ok(())
     }
@@ -120,10 +117,12 @@ mod test {
             .uri("http://www.google.com/")
             .body(Body::empty())
             .expect("Build");
-        let conn = connect_sync::<PassTlsConnector>(req.uri())?;
-        let res = conn.send_request_sync(req)?;
-        let (_, mut body) = res.into_parts();
-        let body_s = body.as_string_sync(1024 * 1024)?;
+        let body_s = block_on(async {
+            let conn = connect::<PassTlsConnector>(req.uri()).await?;
+            let res = conn.send_request(req).await?;
+            let (_, mut body) = res.into_parts();
+            body.as_string(1024 * 1024).await
+        })?;
         println!("{}", body_s);
         Ok(())
     }

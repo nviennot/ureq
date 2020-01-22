@@ -2,7 +2,6 @@ use crate::chunked::ChunkedDecoder;
 use crate::conn::ProtocolImpl;
 use crate::limit::LimitRead;
 use crate::peek::Peekable;
-use crate::AsyncImpl;
 use crate::Connection;
 use crate::Error;
 use crate::Stream;
@@ -124,11 +123,6 @@ impl Body {
         Ok(read)
     }
 
-    pub fn read_sync(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        let fut = self.read(buf);
-        Ok(AsyncImpl::run_until(fut)?)
-    }
-
     // helper to shuffle Bytes into a &[u8] and handle the remains.
     fn bytes_to_buf(&mut self, mut data: Bytes, buf: &mut [u8]) -> usize {
         let max = data.len().min(buf.len());
@@ -167,19 +161,9 @@ impl Body {
         Ok(vec)
     }
 
-    pub fn as_vec_sync(&mut self, max: usize) -> Result<Vec<u8>, Error> {
-        let fut = self.as_vec(max);
-        Ok(AsyncImpl::run_until(fut)?)
-    }
-
     pub async fn as_string(&mut self, max: usize) -> Result<String, Error> {
         let bytes = self.as_vec(max).await?;
         Ok(String::from_utf8_lossy(&bytes).to_string())
-    }
-
-    pub fn as_string_sync(&mut self, max: usize) -> Result<String, Error> {
-        let fut = self.as_string(max);
-        Ok(AsyncImpl::run_until(fut)?)
     }
 }
 

@@ -2,51 +2,69 @@ use crate::Error;
 use crate::Stream;
 use std::future::Future;
 
-pub struct AsyncImpl;
-
 #[cfg(feature = "async-std")]
-impl Stream for async_std_lib::net::TcpStream {}
+pub mod exec {
+    use super::*;
+    use async_impl::task;
+    use async_std_lib::net::TcpStream;
 
-#[cfg(feature = "async-std")]
-impl AsyncImpl {
-    pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
-        Ok(async_std_lib::net::TcpStream::connect(addr).await?)
-    }
+    pub struct AsyncImpl;
 
-    pub fn spawn<T>(task: T)
-    where
-        T: Future + Send + 'static,
-    {
-        async_std_lib::task::spawn(async move {
-            task.await;
-        });
-    }
+    impl Stream for TcpStream {}
 
-    pub fn run_until<F: Future>(future: F) -> F::Output {
-        async_std_lib::task::block_on(future)
+    impl AsyncImpl {
+        pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
+            Ok(TcpStream::connect(addr).await?)
+        }
+
+        pub fn spawn<T>(task: T)
+        where
+            T: Future + Send + 'static,
+        {
+            async_std_lib::task::spawn(async move {
+                task.await;
+            });
+        }
+
+        pub fn block_on<F: Future>(future: F) -> F::Output {
+            task::block_on(future)
+        }
     }
 }
 
 #[cfg(feature = "tokio")]
-use once_cell::sync::OnceCell;
+pub mod exec {
+    use super::*;
+    use crate::tokio::from_tokio;
+    use once_cell::sync::OnceCell;
+    use std::sync::Mutex;
+    use tokio_exe::net::TcpStream;
+    use tokio_exe::runtime::{Builder, Handle, Runtime};
 
-#[cfg(feature = "tokio")]
-use std::sync::Mutex;
+    static RUNTIME: OnceCell<Mutex<Runtime>> = OnceCell::new();
+    static HANDLE: OnceCell<Handle> = OnceCell::new();
 
-#[cfg(feature = "tokio")]
-use tokio_exe::runtime::{Builder, Handle, Runtime};
+    pub struct AsyncImpl;
 
-#[cfg(feature = "tokio")]
-static RUNTIME: OnceCell<Mutex<Runtime>> = OnceCell::new();
-#[cfg(feature = "tokio")]
-static HANDLE: OnceCell<Handle> = OnceCell::new();
+    impl AsyncImpl {
+        pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
+            Ok(from_tokio(TcpStream::connect(addr).await?))
+        }
 
-#[cfg(feature = "tokio")]
-impl AsyncImpl {
-    pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
-        Ok(crate::tokio::from_tokio(
-            tokio_exe::net::TcpStream::connect(addr).await?,
-        ))
+        pub fn spawn<T>(task: T)
+        where
+            T: Future + Send + 'static,
+        {
+            with_handle(|h| {
+                h.spawn(async move {
+                    task.await;
+                });
+            });
+        }
+
+        pub fn block_on<F: Future>(future: F) -> F::Output {
+            with_runtime(|rt| rt.block_on(future))
+        }
     }
 
     fn create_default_runtime() -> (Handle, Runtime) {
@@ -62,7 +80,7 @@ impl AsyncImpl {
     fn with_runtime<F: FnOnce(&mut tokio_exe::runtime::Runtime) -> R, R>(f: F) -> R {
         let mut rt = RUNTIME
             .get_or_init(|| {
-                let (h, rt) = AsyncImpl::create_default_runtime();
+                let (h, rt) = create_default_runtime();
                 HANDLE.set(h).expect("Failed to set HANDLE");
                 Mutex::new(rt)
             })
@@ -75,27 +93,12 @@ impl AsyncImpl {
         let h = {
             HANDLE
                 .get_or_init(|| {
-                    let (h, rt) = AsyncImpl::create_default_runtime();
+                    let (h, rt) = create_default_runtime();
                     RUNTIME.set(Mutex::new(rt)).expect("Failed to set RUNTIME");
                     h
                 })
                 .clone()
         };
         f(h)
-    }
-
-    pub fn spawn<T>(task: T)
-    where
-        T: Future + Send + 'static,
-    {
-        AsyncImpl::with_handle(|h| {
-            h.spawn(async move {
-                task.await;
-            });
-        });
-    }
-
-    pub fn run_until<F: Future>(future: F) -> F::Output {
-        AsyncImpl::with_runtime(|rt| rt.block_on(future))
     }
 }
