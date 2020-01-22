@@ -6,7 +6,7 @@ edition = "2018"
 
 [features]
 default = [
-    "async-std",
+    "tokio",
 ]
 async-std = [
     "async-std-lib",
@@ -35,6 +35,8 @@ async-std-lib = { package = "async-std", version = "*", optional = true }
 # We always need a tokio impl also for async-std because tlsapi is using tokio traits.
 tokio-min = { package = "tokio", version = "0.2", features = [], optional = true }
 tokio-exe = { package = "tokio", version = "0.2", features = ["rt-core", "tcp", "dns"], optional = true }
+
+tls-api-rustls = { version = "*", optional = true }
 
 [dev-dependencies]
 tls-api-rustls = "*"
