@@ -39,6 +39,7 @@ mod limit;
 mod peek;
 mod proto;
 mod req_ext;
+mod tls_api_pass;
 mod tokio;
 mod uri;
 
@@ -73,17 +74,7 @@ pub use crate::tls::wrap_tls;
 use tls_api::TlsConnector;
 
 #[cfg(feature = "tls")]
-pub async fn connect<Tls: TlsConnector, X>(req: &http::Request<X>) -> Result<Connection, Error> {
-    Ok(connect_uri::<Tls>(req.uri()).await?)
-}
-
-#[cfg(not(feature = "tls"))]
-pub async fn connect<X>(req: &http::Request<X>) -> Result<Connection, Error> {
-    Ok(connect_uri(req.uri()).await?)
-}
-
-#[cfg(feature = "tls")]
-pub async fn connect_uri<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
+pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
     let hostport = crate::uri::HostPort::from_uri(uri)?;
     // "host:port"
     let addr = hostport.to_string();
@@ -102,11 +93,17 @@ pub async fn connect_uri<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connectio
         }
     };
 
-    Ok(connect_stream(stream, alpn_proto).await?)
+    Ok(open_stream(stream, alpn_proto).await?)
+}
+
+#[cfg(feature = "tls")]
+pub fn connect_sync<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
+    let fut = connect::<Tls>(uri);
+    Ok(AsyncImpl::run_until(fut)?)
 }
 
 #[cfg(not(feature = "tls"))]
-pub async fn connect_uri(uri: &http::Uri) -> Result<Connection, Error> {
+pub async fn connect(uri: &http::Uri) -> Result<Connection, Error> {
     let hostport = uri::HostPort::from_uri(uri)?;
     // "host:port"
     let addr = hostport.to_string();
@@ -126,7 +123,13 @@ pub async fn connect_uri(uri: &http::Uri) -> Result<Connection, Error> {
     Ok(connect_stream(stream, alpn_proto).await?)
 }
 
-pub async fn connect_stream(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
+#[cfg(not(feature = "tls"))]
+pub fn connect_sync(uri: &http::Uri) -> Result<Connection, Error> {
+    let fut = crate::connect_uri(uri);
+    Ok(Connection(AsyncImpl::run_until(fut)?))
+}
+
+pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
     if proto == Protocol::Http2 {
         let (h2, h2conn) = h2::client::handshake(to_tokio(stream)).await?;
         // drives the connection independently of the h2 api surface.
@@ -144,27 +147,8 @@ pub async fn connect_stream(stream: impl Stream, proto: Protocol) -> Result<Conn
     }
 }
 
-#[cfg(feature = "tls")]
-pub fn connect_sync<Tls: TlsConnector, X>(req: &http::Request<X>) -> Result<Connection, Error> {
-    crate::dlog::set_logger();
-    let fut = connect::<Tls, X>(req);
-    Ok(AsyncImpl::run_until(fut)?)
-}
-
-#[cfg(feature = "tls")]
-pub fn connect_uri_sync<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
-    let fut = crate::connect_uri::<Tls>(uri);
-    Ok(AsyncImpl::run_until(fut)?)
-}
-
-#[cfg(not(feature = "tls"))]
-pub fn connect_uri_sync(uri: &http::Uri) -> Result<Connection, Error> {
-    let fut = crate::connect_uri(uri);
-    Ok(Connection(AsyncImpl::run_until(fut)?))
-}
-
-pub fn connect_stream_sync(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
-    let fut = crate::connect_stream(stream, proto);
+pub fn open_stream_sync(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
+    let fut = open_stream(stream, proto);
     Ok(AsyncImpl::run_until(fut)?)
 }
 
@@ -181,7 +165,7 @@ mod test {
             .query("pooch", "bear")?
             .body(Body::empty())
             .expect("Build");
-        let conn = connect_sync::<TlsConnector, _>(&req)?;
+        let conn = connect_sync::<TlsConnector>(req.uri())?;
         let res = conn.send_request_sync(req)?;
         let (_, mut body) = res.into_parts();
         let body_s = body.as_string_sync(1024 * 1024)?;
