@@ -1,27 +1,5 @@
 #![warn(clippy::all)]
 
-//! What are we doing?
-//!
-//! * Parse URL (http)
-//! * Set request headers (http)
-//!   * Username/password
-//! * Provide a request body (http)
-//! * Resolve DNS (dns-lookup)
-//! * Provide timeout for entire request.
-//! * Connect socket … or is this API surface?
-//! * Wrap socket in SSL (tls-api)
-//! * Talk http (httparse)
-//! * Talk http2 (h2?)
-//! * Body data transformations
-//!   * chunked encoding (my own)
-//!   * x-www-form-urlencoded (write it?)
-//!   * form-data (multipart) (write it?)
-//! * Provide retry logic
-//! * Connection pooling
-//! * Cookie state in connection (cookie)
-//! * HTTP Proxy
-//!
-
 #[macro_use]
 extern crate log;
 
