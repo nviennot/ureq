@@ -39,12 +39,10 @@ mod limit;
 mod peek;
 mod proto;
 mod req_ext;
+mod tls;
 mod tls_api_pass;
 mod tokio;
 mod uri;
-
-#[cfg(feature = "tls")]
-mod tls;
 
 pub use http;
 
@@ -67,14 +65,12 @@ use crate::proto::Protocol;
 pub use crate::req_ext::{RequestBuilderExt, RequestExt};
 use crate::tokio::to_tokio;
 
-#[cfg(feature = "tls")]
 pub use crate::tls::wrap_tls;
 
-#[cfg(feature = "tls")]
 use tls_api::TlsConnector;
 
-#[cfg(feature = "tls")]
 pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
+    crate::dlog::set_logger();
     let hostport = crate::uri::HostPort::from_uri(uri)?;
     // "host:port"
     let addr = hostport.to_string();
@@ -96,37 +92,9 @@ pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, E
     Ok(open_stream(stream, alpn_proto).await?)
 }
 
-#[cfg(feature = "tls")]
 pub fn connect_sync<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
     let fut = connect::<Tls>(uri);
     Ok(AsyncImpl::run_until(fut)?)
-}
-
-#[cfg(not(feature = "tls"))]
-pub async fn connect(uri: &http::Uri) -> Result<Connection, Error> {
-    let hostport = uri::HostPort::from_uri(uri)?;
-    // "host:port"
-    let addr = hostport.to_string();
-
-    let (stream, alpn_proto) = {
-        // "raw" tcp
-        let tcp = AsyncImpl::connect_tcp(&addr).await?;
-
-        if hostport.is_tls() {
-            return Err(format!("Need cargo 'tls' feature for URI: {}", uri).into());
-        } else {
-            // use tcp
-            (tcp, Protocol::Unknown)
-        }
-    };
-
-    Ok(connect_stream(stream, alpn_proto).await?)
-}
-
-#[cfg(not(feature = "tls"))]
-pub fn connect_sync(uri: &http::Uri) -> Result<Connection, Error> {
-    let fut = crate::connect_uri(uri);
-    Ok(Connection(AsyncImpl::run_until(fut)?))
 }
 
 pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
@@ -154,18 +122,31 @@ pub fn open_stream_sync(stream: impl Stream, proto: Protocol) -> Result<Connecti
 
 #[cfg(test)]
 mod test {
+    use super::tls_api_pass::TlsConnector as PassTlsConnector;
     use super::*;
-    use tls_api_rustls::TlsConnector;
+    use tls_api_rustls::TlsConnector as RustlsTlsConnector;
 
     #[test]
-    fn test_add() -> Result<(), Error> {
+    fn test_add_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("https://www.google.com/")
-            .query("foo", "bar")?
-            .query("pooch", "bear")?
             .body(Body::empty())
             .expect("Build");
-        let conn = connect_sync::<TlsConnector>(req.uri())?;
+        let conn = connect_sync::<RustlsTlsConnector>(req.uri())?;
+        let res = conn.send_request_sync(req)?;
+        let (_, mut body) = res.into_parts();
+        let body_s = body.as_string_sync(1024 * 1024)?;
+        println!("{}", body_s);
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_no_tls() -> Result<(), Error> {
+        let req = http::Request::builder()
+            .uri("http://www.google.com/")
+            .body(Body::empty())
+            .expect("Build");
+        let conn = connect_sync::<PassTlsConnector>(req.uri())?;
         let res = conn.send_request_sync(req)?;
         let (_, mut body) = res.into_parts();
         let body_s = body.as_string_sync(1024 * 1024)?;

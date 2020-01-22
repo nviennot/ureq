@@ -4,16 +4,9 @@ version = "1.0.0"
 authors = ["Martin Algesten <martin@lookback.io>"]
 edition = "2018"
 
-[package.metadata.docs.rs]
-features = ["std"]
-
 [features]
 default = [
     "tokio",
-    "tls",
-]
-tls = [
-    "tls-api",
 ]
 std = [
     "async-std",
@@ -35,11 +28,11 @@ log = "*"
 once_cell = "*"
 qstring = "*"
 async-trait = "*"
+tls-api = "*"
 
 async-std = { version = "*", optional = true }
-tls-api = { version = "*", optional = true }
 
-# We always need a tokio impl because tls-api talks tokio::io::AsyncRead/Write
+# We always need a tokio impl also in the sync case.
 tokio-min = { package = "tokio", version = "0.2", features = [], optional = true }
 tokio-exe = { package = "tokio", version = "0.2", features = ["rt-core", "tcp", "dns"], optional = true }
 

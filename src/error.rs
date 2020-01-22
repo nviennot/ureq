@@ -1,8 +1,6 @@
 use std::fmt;
 use std::io;
 use std::string::FromUtf8Error;
-
-#[cfg(feature = "tls")]
 use tls_api::Error as TlsError;
 
 #[derive(Debug)]
@@ -10,7 +8,6 @@ pub enum Error {
     Message(String),
     Static(&'static str),
     Io(io::Error),
-    #[cfg(feature = "tls")]
     TlsError(tls_api::Error),
     H2(h2::Error),
     Http11Parser(httparse::Error),
@@ -43,7 +40,6 @@ impl From<io::Error> for Error {
     }
 }
 
-#[cfg(feature = "tls")]
 impl From<TlsError> for Error {
     fn from(e: TlsError) -> Self {
         Error::TlsError(e)
