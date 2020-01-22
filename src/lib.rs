@@ -64,7 +64,7 @@ use crate::conn::ProtocolImpl;
 use crate::either::Either;
 use crate::peek::Peekable;
 use crate::proto::Protocol;
-pub use crate::req_ext::RequestBuilderExt;
+pub use crate::req_ext::{RequestBuilderExt, RequestExt};
 use crate::tokio::to_tokio;
 
 #[cfg(feature = "tls")]

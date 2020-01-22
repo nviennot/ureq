@@ -34,6 +34,7 @@ httparse = "*"
 log = "*"
 once_cell = "*"
 qstring = "*"
+async-trait = "*"
 
 async-std = { version = "*", optional = true }
 tls-api = { version = "*", optional = true }

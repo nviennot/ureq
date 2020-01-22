@@ -22,8 +22,8 @@ pub struct Body {
 
 pub enum BodyImpl {
     RequestEmpty,
-    RequestAsyncRead(Box<dyn AsyncRead + Unpin>),
-    RequestRead(Box<dyn io::Read>),
+    RequestAsyncRead(Box<dyn AsyncRead + Unpin + Send>),
+    RequestRead(Box<dyn io::Read + Send>),
     Http11Chunked(ChunkedDecoder),
     Http11Limited(LimitRead),
     Http11Unlimited(Peekable<Box<dyn Stream>>),
@@ -34,10 +34,10 @@ impl Body {
     pub fn empty() -> Self {
         Self::new(BodyImpl::RequestEmpty)
     }
-    pub fn from_async_read<R: AsyncRead + Unpin + 'static>(reader: R) -> Self {
+    pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
         Self::new(BodyImpl::RequestAsyncRead(Box::new(reader)))
     }
-    pub fn from_sync_read<R: io::Read + 'static>(reader: R) -> Self {
+    pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
         Self::new(BodyImpl::RequestRead(Box::new(reader)))
     }
     pub(crate) fn new(inner: BodyImpl) -> Self {

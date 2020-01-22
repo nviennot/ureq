@@ -1,3 +1,9 @@
+use crate::async_impl::AsyncImpl;
+use crate::Body;
+use async_trait::async_trait;
+use http::request;
+use http::Uri;
+use http::{Request, Response};
 use qstring::QString;
 
 pub trait RequestBuilderExt
@@ -7,7 +13,7 @@ where
     fn query(self, key: &str, value: &str) -> http::Result<Self>;
 }
 
-impl RequestBuilderExt for http::request::Builder {
+impl RequestBuilderExt for request::Builder {
     //
     fn query(self, key: &str, value: &str) -> http::Result<Self> {
         // Parts is private in Builder. We have to body() to get it out.
@@ -29,18 +35,18 @@ impl RequestBuilderExt for http::request::Builder {
 
             // PathAndQuery has no API for modifying any fields. This seems to be our only
             // option to get a new instance of it using the public API.
-            let tmp: http::Uri = format!("http://fake{}?{}", path, qs).parse().unwrap();
+            let tmp: Uri = format!("http://fake{}?{}", path, qs).parse().unwrap();
             let tmp_parts = tmp.into_parts();
             tmp_parts.path_and_query.unwrap()
         };
 
         // This is good. We can change the PathAndQuery field.
         uri_parts.path_and_query = Some(new_path_and_query);
-        let new_uri = http::Uri::from_parts(uri_parts).unwrap();
+        let new_uri = Uri::from_parts(uri_parts).unwrap();
 
         // The result of this RequestBuilderExt is a Builder, but we don't have any
         // RequestBuilder::from_parts(), which means we're forced to start over.
-        let mut builder = http::Request::builder()
+        let mut builder = Request::builder()
             .method(req_parts.method)
             .uri(new_uri)
             .version(req_parts.version);
@@ -58,4 +64,24 @@ impl RequestBuilderExt for http::request::Builder {
     }
 }
 
-pub trait RequestExt {}
+#[async_trait]
+pub trait RequestExt {
+    /// Signature: `async fn send(self) -> Response<Body>`
+    async fn send(self) -> Response<Body>;
+
+    fn send_sync(self) -> Response<Body>;
+}
+
+#[async_trait]
+impl RequestExt for Request<Body> {
+    //
+    fn send_sync(self) -> Response<Body> {
+        let fut = self.send();
+        AsyncImpl::run_until(fut)
+    }
+
+    async fn send(self) -> Response<Body> {
+        //
+        unimplemented!()
+    }
+}
