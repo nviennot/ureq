@@ -1,5 +1,4 @@
 use crate::Error;
-use crate::{AsyncWrite, AsyncWriteExt};
 use std::io;
 use std::io::Write;
 
@@ -9,11 +8,7 @@ use std::io::Write;
 // http://dev.chromium.org/spdy/spdy-whitepaper
 
 #[allow(clippy::write_with_newline)]
-pub async fn write_http11_req<Write: AsyncWrite + Unpin, X>(
-    conn: &mut Write,
-    req: &http::Request<X>,
-    buf: &mut [u8],
-) -> Result<usize, Error> {
+pub fn write_http11_req<X>(req: &http::Request<X>, buf: &mut [u8]) -> Result<usize, Error> {
     // Write http request into a buffer
     let mut w = io::Cursor::new(buf);
     write!(w, "{} {} HTTP/1.1\r\n", req.method(), req.uri().path())?;
@@ -49,10 +44,10 @@ pub async fn write_http11_req<Write: AsyncWrite + Unpin, X>(
             String::from_utf8_lossy(&buf[0..len])
         );
     }
-    conn.write_all(&buf[0..len]).await?;
 
     Ok(len)
 }
+
 pub fn try_parse_http11(buf: &[u8]) -> Result<Option<(http::Response<()>, usize)>, Error> {
     if log_enabled!(log::Level::Trace) {
         trace!("try_parse_http11: {:?}", String::from_utf8_lossy(buf));

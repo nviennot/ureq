@@ -13,7 +13,8 @@ pub async fn send_request_http11(
     buf: &mut [u8],
 ) -> Result<(), Error> {
     // write request header
-    write_http11_req(stream, &req, buf).await?;
+    let size = write_http11_req(&req, buf)?;
+    stream.write_all(&buf[0..size]).await?;
 
     // send request body
     send_req_body(stream, req, &mut buf[..]).await?;

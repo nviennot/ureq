@@ -7,11 +7,13 @@ mod async_impl;
 mod body;
 mod chunked;
 mod conn;
+mod conn_http1;
 mod conn_http11;
 mod conn_http2;
 mod dlog;
 mod either;
 mod error;
+pub mod h1;
 mod http11;
 mod limit;
 mod peek;
@@ -80,9 +82,18 @@ pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connect
         });
         Ok(Connection::new(ProtocolImpl::Http2(h2)))
     } else {
-        let boxed: Box<dyn Stream> = Box::new(stream);
-        let peekable = Peekable::new(boxed, crate::PARSE_BUF_SIZE);
-        Ok(Connection::new(ProtocolImpl::Http11(peekable)))
+        let (h1, h1conn) = h1::handshake(stream);
+        // drives the connection independently of the h1 api surface
+        AsyncImpl::spawn(async {
+            if let Err(err) = h1conn.await {
+                // this is expected to happen when the connection disconnects
+                trace!("Error in connection: {:?}", err);
+            }
+        });
+        unimplemented!()
+        // let boxed: Box<dyn Stream> = Box::new(stream);
+        // let peekable = Peekable::new(boxed, crate::PARSE_BUF_SIZE);
+        // Ok(Connection::new(ProtocolImpl::Http11(peekable)))
     }
 }
 

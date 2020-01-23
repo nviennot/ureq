@@ -1,5 +1,6 @@
 use crate::chunked::ChunkedDecoder;
 use crate::conn::ProtocolImpl;
+use crate::h1::SendRequest as H1SendRequest;
 use crate::limit::LimitRead;
 use crate::peek::Peekable;
 use crate::Connection;
@@ -7,7 +8,7 @@ use crate::Error;
 use crate::Stream;
 use crate::{AsyncRead, AsyncReadExt};
 use bytes::Bytes;
-use h2::client::SendRequest;
+use h2::client::SendRequest as H2SendRequest;
 use h2::RecvStream;
 use std::io;
 
@@ -23,10 +24,11 @@ pub enum BodyImpl {
     RequestEmpty,
     RequestAsyncRead(Box<dyn AsyncRead + Unpin + Send>),
     RequestRead(Box<dyn io::Read + Send>),
+    Http1(H1SendRequest),
     Http11Chunked(ChunkedDecoder),
     Http11Limited(LimitRead),
     Http11Unlimited(Peekable<Box<dyn Stream>>),
-    Http2(RecvStream, SendRequest<Bytes>),
+    Http2(RecvStream, H2SendRequest<Bytes>),
 }
 
 impl Body {
@@ -105,6 +107,7 @@ impl Body {
             BodyImpl::RequestEmpty => 0,
             BodyImpl::RequestAsyncRead(reader) => reader.read(buf).await?,
             BodyImpl::RequestRead(reader) => reader.read(buf)?,
+            BodyImpl::Http1(_) => 0,
             BodyImpl::Http11Chunked(decoder) => decoder.read_chunk(buf).await?,
             BodyImpl::Http11Limited(limiter) => limiter.read(buf).await?,
             BodyImpl::Http11Unlimited(stream) => stream.read(buf).await?,

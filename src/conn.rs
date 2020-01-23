@@ -1,17 +1,20 @@
+use crate::conn_http1::send_request_http1;
 use crate::conn_http11::{read_response_http11, response_body_http11, send_request_http11};
 use crate::conn_http2::send_request_http2;
+use crate::h1::SendRequest as H1SendRequest;
 use crate::peek::Peekable;
 use crate::Body;
 use crate::Error;
 use crate::Stream;
 use bytes::Bytes;
-use h2::client::SendRequest;
+use h2::client::SendRequest as H2SendRequest;
 use std::fmt;
 
 pub enum ProtocolImpl {
     Unusable { reason: &'static str },
     Http11(Peekable<Box<dyn Stream>>),
-    Http2(SendRequest<Bytes>),
+    Http1(H1SendRequest),
+    Http2(H2SendRequest<Bytes>),
 }
 
 impl fmt::Display for ProtocolImpl {
@@ -19,6 +22,7 @@ impl fmt::Display for ProtocolImpl {
         match self {
             ProtocolImpl::Unusable { reason } => write!(f, "Unusable: {}", reason),
             ProtocolImpl::Http11(_) => write!(f, "Http11"),
+            ProtocolImpl::Http1(_) => write!(f, "Http1"),
             ProtocolImpl::Http2(_) => write!(f, "Http2"),
         }
     }
@@ -59,6 +63,7 @@ impl Connection {
                 Ok(response_body_http11(resp, stream).await?)
             }
             ProtocolImpl::Http2(send_req) => Ok(send_request_http2(send_req, req).await?),
+            ProtocolImpl::Http1(send_req) => Ok(send_request_http1(send_req, req).await?),
             ProtocolImpl::Unusable { reason } => Err(Error::Message(format!(
                 "Connection is unusable: {}",
                 reason
