@@ -55,7 +55,7 @@ pub async fn send_request_http2(
 
     let (parts, res_body) = res.into_parts();
 
-    let content_encoding = ContentEncoding::from_headers(&parts.headers);
+    let content_encoding = ContentEncoding::from_headers(&parts.headers, true);
 
     let res_body = Body::new(BodyImpl::Http2(res_body, send_req_clone), content_encoding);
     let res = http::Response::from_parts(parts, res_body);
