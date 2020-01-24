@@ -15,8 +15,9 @@ What are we doing?
 * [ ] Timeout for entire request.
 * [x] Connect socket … or is this API surface?
 * [x] Wrap socket in SSL (tls-api)
-* [x] Talk http (httparse)
+* [x] Talk http1 (write own h1, httparse)
 * [x] Talk http2 (h2)
+* [ ] Ergonomic body methods
 * Body data transformations
   * [x] chunked encoding (my own)
   * [ ] x-www-form-urlencoded (write it?)
