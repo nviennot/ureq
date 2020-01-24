@@ -78,7 +78,7 @@ pub struct UntilEnd;
 
 impl UntilEnd {
     async fn read_from(&mut self, recv: &mut RecvReader, buf: &mut [u8]) -> Result<usize, Error> {
-        Ok(recv.read(&mut buf[..]).await?)
+        recv.read(&mut buf[..]).await
     }
 }
 

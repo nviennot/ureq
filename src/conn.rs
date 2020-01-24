@@ -42,8 +42,8 @@ impl Connection {
         req: http::Request<Body>,
     ) -> Result<http::Response<Body>, Error> {
         match self.p {
-            ProtocolImpl::Http2(send_req) => Ok(send_request_http2(send_req, req).await?),
-            ProtocolImpl::Http1(send_req) => Ok(send_request_http1(send_req, req).await?),
+            ProtocolImpl::Http2(send_req) => send_request_http2(send_req, req).await,
+            ProtocolImpl::Http1(send_req) => send_request_http1(send_req, req).await,
         }
     }
 }

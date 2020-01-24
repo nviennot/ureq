@@ -61,7 +61,7 @@ pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, E
         }
     };
 
-    Ok(open_stream(stream, alpn_proto).await?)
+    open_stream(stream, alpn_proto).await
 }
 
 pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connection, Error> {
