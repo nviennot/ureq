@@ -1,10 +1,9 @@
-use super::AsyncReadExt;
 use super::Error;
-use super::RecvStream;
+use super::RecvReader;
 use std::io;
 
 /// Decode AsyncRead as transfer-encoding chunked.
-pub struct ChunkedDecoder {
+pub(crate) struct ChunkedDecoder {
     amount_left: usize,
     pub(crate) is_finished: bool,
 }
@@ -19,7 +18,7 @@ impl ChunkedDecoder {
 
     pub async fn read_chunk(
         &mut self,
-        recv: &mut RecvStream,
+        recv: &mut RecvReader,
         buf: &mut [u8],
     ) -> Result<usize, Error> {
         if self.is_finished {
@@ -46,7 +45,7 @@ impl ChunkedDecoder {
     // 3\r\nhel\r\nb\r\nlo world!!!\r\n0\r\n\r\n
     async fn read_chunk_size(
         &mut self,
-        recv: &mut RecvStream,
+        recv: &mut RecvReader,
         buf: &mut [u8],
     ) -> Result<usize, Error> {
         // read until we get a non-numeric character. this could be
@@ -81,7 +80,7 @@ impl ChunkedDecoder {
     }
 
     // skip until we get a \n
-    async fn skip_until_lf(&mut self, recv: &mut RecvStream) -> Result<(), Error> {
+    async fn skip_until_lf(&mut self, recv: &mut RecvReader) -> Result<(), Error> {
         // skip until we get a \n
         let mut one = [0_u8; 1];
         loop {

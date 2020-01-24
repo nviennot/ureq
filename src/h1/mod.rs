@@ -7,8 +7,8 @@ mod task;
 pub use error::Error;
 pub(crate) use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future::poll_fn;
-pub(crate) use futures_util::io::AsyncReadExt;
 use futures_util::ready;
+use limit::Limiter;
 use std::future::Future;
 use std::io;
 use std::mem;
@@ -77,10 +77,11 @@ impl Future for FutureResponse {
             return Poll::Ready(Err(err));
         }
         if let Some(task) = inner.tasks.get_recv_res(self.seq) {
-            let req = task.try_parse()?;
-            if let Some(req) = req {
-                let recv_stream = RecvStream::new(self.inner.clone(), self.seq);
-                let (parts, _) = req.into_parts();
+            let res = task.try_parse()?;
+            if let Some(res) = res {
+                let limiter = Limiter::from_res(&res);
+                let recv_stream = RecvStream::new(self.inner.clone(), self.seq, limiter);
+                let (parts, _) = res.into_parts();
                 Poll::Ready(Ok(http::Response::from_parts(parts, recv_stream)))
             } else {
                 mem::replace(&mut task.waker, cx.waker().clone());
@@ -139,14 +140,35 @@ impl SendStream {
 pub struct RecvStream {
     inner: Arc<Mutex<Inner>>,
     seq: Seq,
+    limiter: Limiter,
 }
 
 impl RecvStream {
-    fn new(inner: Arc<Mutex<Inner>>, seq: Seq) -> Self {
-        Self { inner, seq }
+    fn new(inner: Arc<Mutex<Inner>>, seq: Seq, limiter: Limiter) -> Self {
+        Self {
+            inner,
+            seq,
+            limiter,
+        }
     }
 
-    fn poll_for_content(&self, cx: &mut Context, out: &mut [u8]) -> Poll<Result<usize, Error>> {
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        let mut reader = RecvReader::new(self.inner.clone(), self.seq);
+        self.limiter.read_from(&mut reader, buf).await
+    }
+}
+
+pub(crate) struct RecvReader {
+    inner: Arc<Mutex<Inner>>,
+    seq: Seq,
+}
+
+impl RecvReader {
+    fn new(inner: Arc<Mutex<Inner>>, seq: Seq) -> Self {
+        RecvReader { inner, seq }
+    }
+
+    fn poll_read(&self, cx: &mut Context, out: &mut [u8]) -> Poll<Result<usize, Error>> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(task) = inner.tasks.get_recv_body(self.seq) {
             mem::replace(&mut task.waker, cx.waker().clone());
@@ -156,8 +178,10 @@ impl RecvStream {
             } else {
                 let max = buf.len().min(out.len());
                 (&mut out[0..max]).copy_from_slice(&buf[0..max]);
-                let rest = buf.split_off(max);
-                mem::replace(buf, rest);
+                if max < buf.len() {
+                    let rest = buf.split_off(max);
+                    mem::replace(buf, rest);
+                }
                 Poll::Ready(Ok(max))
             }
         } else {
@@ -168,7 +192,7 @@ impl RecvStream {
     }
 
     pub async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        Ok(poll_fn(|cx| self.poll_for_content(cx, buf)).await?)
+        poll_fn(|cx| self.poll_read(cx, buf)).await
     }
 }
 
@@ -276,7 +300,9 @@ where
 
                 let complete = match ready!(task.poll_connection(cx, &mut self_.io, &mut state)) {
                     Ok(v) => {
-                        // update state back to inner
+                        if inner.state != State::Ready && state == State::Ready {
+                            inner.cur_seq += 1;
+                        }
                         inner.state = state;
                         v
                     }
