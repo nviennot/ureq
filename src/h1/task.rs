@@ -144,6 +144,9 @@ impl RecvRes {
     }
 
     pub fn try_parse(&self) -> Result<Option<http::Response<()>>, Error> {
+        if self.buf.is_empty() {
+            return Ok(None);
+        }
         if let Some((req, used_bytes)) = try_parse_http11(&self.buf[..])? {
             assert_eq!(
                 used_bytes,

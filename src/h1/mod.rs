@@ -346,6 +346,9 @@ where
                 }
             }
 
+            // prune before getting any task for the state, to avoid getting stale.
+            inner.tasks.prune_completed();
+
             if let Some(task) = inner.tasks.task_for_state(cur_seq, state) {
                 match ready!(task.poll_connection(cx, &mut self_.io, &mut state)) {
                     Ok(_) => {
@@ -366,11 +369,9 @@ where
                     }
                 };
             } else {
-                trace!("Connection pending");
+                trace!("Connection Poll::Pending");
                 break Poll::Pending;
             }
-
-            inner.tasks.prune_completed();
         }
     }
 }

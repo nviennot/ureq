@@ -45,16 +45,16 @@ impl Limiter {
             .map(|h| h == "chunked")
             .unwrap_or(false);
 
-        let content_size = res
+        let content_length = res
             .headers()
-            .get("content-size")
+            .get("content-length")
             .and_then(|h| h.to_str().ok().and_then(|c| c.parse::<u64>().ok()));
 
-        let use_chunked = transfer_enc_chunk || content_size.is_none();
+        let use_chunked = transfer_enc_chunk || content_length.is_none();
 
         if use_chunked {
             Limiter::ChunkedDecoder(ChunkedDecoder::new())
-        } else if let Some(size) = content_size {
+        } else if let Some(size) = content_length {
             Limiter::ContenLength(ContentLength::new(size))
         } else {
             Limiter::UntilEnd(UntilEnd)
