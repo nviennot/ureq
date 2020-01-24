@@ -17,12 +17,15 @@ What are we doing?
 * [x] Wrap socket in SSL (tls-api)
 * [x] Talk http (httparse)
 * [x] Talk http2 (h2)
-* [x] Body data transformations
+* Body data transformations
   * [x] chunked encoding (my own)
   * [ ] x-www-form-urlencoded (write it?)
   * [ ] form-data (multipart) (write it?)
 * [x] Query parameters
-* [ ] Content encoding
+* Content decoder
+  * [x] character sets
+  * [x] gzip
+* Content encoding
   * [ ] character sets
   * [x] gzip
 * [ ] Retry logic

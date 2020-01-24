@@ -35,6 +35,7 @@ once_cell = "*"
 qstring = "*"
 async-trait = "*"
 tls-api = "*"
+encoding_rs = "*"
 
 ## async-std
 async-std-lib = { package = "async-std", version = "*", optional = true }

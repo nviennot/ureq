@@ -1,3 +1,4 @@
+use crate::char_enc::CharCodec;
 use crate::conn::ProtocolImpl;
 use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
@@ -6,6 +7,7 @@ use crate::Error;
 use crate::{AsyncBufRead, AsyncRead};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
+use futures_util::io::BufReader;
 use futures_util::ready;
 use h2::client::SendRequest as H2SendRequest;
 use h2::RecvStream as H2RecvStream;
@@ -20,6 +22,8 @@ const BUF_SIZE: usize = 16_384;
 
 pub struct Body {
     codec: BodyCodec,
+    has_read: bool,
+    char_codec: Option<CharCodec>,
 }
 
 impl Body {
@@ -41,7 +45,11 @@ impl Body {
     pub(crate) fn new(bimpl: BodyImpl, codec_kind: ContentEncoding) -> Self {
         let reader = BodyReader::new(bimpl);
         let codec = BodyCodec::new(codec_kind, reader);
-        Body { codec }
+        Body {
+            codec,
+            has_read: false,
+            char_codec: None,
+        }
     }
 
     pub(crate) fn resolve_deferred(&mut self, codec_kind: ContentEncoding) {
@@ -51,6 +59,13 @@ impl Body {
                 self.codec = new_codec;
             }
         }
+    }
+
+    pub(crate) fn set_char_codec(&mut self, charset: &str, decode: bool) {
+        if self.has_read {
+            panic!("set_char_codec after body started reading");
+        }
+        self.char_codec = Some(CharCodec::new(charset, decode));
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
@@ -90,14 +105,30 @@ impl ContentEncoding {
     }
 }
 
+pub fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|x| {
+            // text/html; charset=utf-8
+            let s = x.split(';');
+            s.last().map(|l| l.trim())
+        })
+        .and_then(|x| {
+            // charset=utf-8
+            let mut s = x.split('=');
+            s.nth(1)
+        })
+}
+
 #[allow(clippy::large_enum_variant)]
 enum BodyCodec {
     Deferred(Option<BodyReader>),
     Plain(BodyReader),
     #[cfg(feature = "gzip")]
-    GzipDecoder(GzipDecoder<BodyReader>),
+    GzipDecoder(BufReader<GzipDecoder<BodyReader>>),
     #[cfg(feature = "gzip")]
-    GzipEncoder(GzipEncoder<BodyReader>),
+    GzipEncoder(BufReader<GzipEncoder<BodyReader>>),
 }
 
 impl BodyCodec {
@@ -107,11 +138,13 @@ impl BodyCodec {
             ContentEncoding::Deferred => BodyCodec::Deferred(Some(reader)),
             ContentEncoding::Plain => BodyCodec::Plain(reader),
             #[cfg(feature = "gzip")]
-            ContentEncoding::GzipDecode => BodyCodec::GzipDecoder(GzipDecoder::new(reader)),
-            #[cfg(feature = "gzip")]
-            ContentEncoding::GzipEncode => {
-                BodyCodec::GzipEncoder(GzipEncoder::new(reader, flate2::Compression::fast()))
+            ContentEncoding::GzipDecode => {
+                BodyCodec::GzipDecoder(BufReader::new(GzipDecoder::new(reader)))
             }
+            #[cfg(feature = "gzip")]
+            ContentEncoding::GzipEncode => BodyCodec::GzipEncoder(BufReader::new(
+                GzipEncoder::new(reader, flate2::Compression::fast()),
+            )),
         }
     }
 
@@ -120,14 +153,14 @@ impl BodyCodec {
             BodyCodec::Deferred(_) => panic!("into_inner() on BodyCodec::Deferred"),
             BodyCodec::Plain(r) => r,
             #[cfg(feature = "gzip")]
-            BodyCodec::GzipDecoder(r) => r.into_inner(),
+            BodyCodec::GzipDecoder(r) => r.into_inner().into_inner(),
             #[cfg(feature = "gzip")]
-            BodyCodec::GzipEncoder(r) => r.into_inner(),
+            BodyCodec::GzipEncoder(r) => r.into_inner().into_inner(),
         }
     }
 }
 
-struct BodyReader {
+pub struct BodyReader {
     imp: BodyImpl,
     read_buf: Vec<u8>,
     read_buf_end: usize,
@@ -333,6 +366,49 @@ impl From<Vec<u8>> for Body {
     }
 }
 
+impl AsyncRead for BodyCodec {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        match this {
+            BodyCodec::Deferred(_) => panic!("poll_read on BodyCodec::Deferred"),
+            BodyCodec::Plain(r) => Pin::new(r).poll_read(cx, buf),
+            #[cfg(feature = "gzip")]
+            BodyCodec::GzipDecoder(r) => Pin::new(r).poll_read(cx, buf),
+            #[cfg(feature = "gzip")]
+            BodyCodec::GzipEncoder(r) => Pin::new(r).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncBufRead for BodyCodec {
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        let this = self.get_mut();
+        match this {
+            BodyCodec::Deferred(_) => panic!("poll_fill_buf on BodyCodec::Deferred"),
+            BodyCodec::Plain(r) => Pin::new(r).poll_fill_buf(cx),
+            #[cfg(feature = "gzip")]
+            BodyCodec::GzipDecoder(r) => Pin::new(r).poll_fill_buf(cx),
+            #[cfg(feature = "gzip")]
+            BodyCodec::GzipEncoder(r) => Pin::new(r).poll_fill_buf(cx),
+        }
+    }
+    fn consume(self: Pin<&mut Self>, amount: usize) {
+        let this = self.get_mut();
+        match this {
+            BodyCodec::Deferred(_) => panic!("consume on BodyCodec::Deferred"),
+            BodyCodec::Plain(r) => Pin::new(r).consume(amount),
+            #[cfg(feature = "gzip")]
+            BodyCodec::GzipDecoder(r) => Pin::new(r).consume(amount),
+            #[cfg(feature = "gzip")]
+            BodyCodec::GzipEncoder(r) => Pin::new(r).consume(amount),
+        }
+    }
+}
+
 impl AsyncRead for Body {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -340,13 +416,11 @@ impl AsyncRead for Body {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        match &mut this.codec {
-            BodyCodec::Deferred(_) => panic!("poll_read on BodyCodec::Deferred"),
-            BodyCodec::Plain(r) => Pin::new(r).poll_read(cx, buf),
-            #[cfg(feature = "gzip")]
-            BodyCodec::GzipDecoder(r) => Pin::new(r).poll_read(cx, buf),
-            #[cfg(feature = "gzip")]
-            BodyCodec::GzipEncoder(r) => Pin::new(r).poll_read(cx, buf),
+        this.has_read = true;
+        if let Some(char_codec) = &mut this.char_codec {
+            char_codec.poll_decode(cx, &mut this.codec, buf)
+        } else {
+            Pin::new(&mut this.codec).poll_read(cx, buf)
         }
     }
 }
