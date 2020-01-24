@@ -44,6 +44,8 @@ What are we doing?
 * [ ] HTTP Proxy
 * [ ] Follow redirects
 * [ ] expect-100
+* [ ] Upstream PassTlsConnector
+* [ ] Cleanup Errors (implement Display proper)
 
 > Minimal request library in rust.
 
