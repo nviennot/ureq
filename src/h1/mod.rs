@@ -40,10 +40,10 @@ impl SendRequest {
     }
 
     pub fn send_request(
-        self,
+        &mut self,
         req: http::Request<()>,
         end: bool,
-    ) -> Result<(FutureResponse, SendStream), Error> {
+    ) -> Result<(ResponseFuture, SendStream), Error> {
         let seq = {
             let mut inner = self.inner.lock().unwrap();
             let seq = Seq(inner.next_seq);
@@ -52,36 +52,40 @@ impl SendRequest {
             inner.enqueue(task);
             seq
         };
-        let fut_response = FutureResponse::new(self.inner.clone(), seq);
-        let send_stream = SendStream::new(self.inner, seq);
+        let fut_response = ResponseFuture::new(self.inner.clone(), seq);
+        let send_stream = SendStream::new(self.inner.clone(), seq);
         Ok((fut_response, send_stream))
     }
 }
 
-pub struct FutureResponse {
+pub struct ResponseFuture {
     inner: Arc<Mutex<Inner>>,
     seq: Seq,
 }
 
-impl FutureResponse {
+impl ResponseFuture {
     fn new(inner: Arc<Mutex<Inner>>, seq: Seq) -> Self {
-        FutureResponse { inner, seq }
+        ResponseFuture { inner, seq }
     }
 }
 
-impl Future for FutureResponse {
+impl Future for ResponseFuture {
     type Output = Result<http::Response<RecvStream>, Error>;
+
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut inner = self.inner.lock().unwrap();
+
         if let Some(err) = inner.get_remote_error() {
             return Poll::Ready(Err(err));
         }
+
         if let Some(task) = inner.tasks.get_recv_res(self.seq) {
             let res = task.try_parse()?;
             if let Some(res) = res {
                 let limiter = Limiter::from_response(&res);
                 let recv_stream = RecvStream::new(self.inner.clone(), self.seq, limiter);
                 let (parts, _) = res.into_parts();
+                task.info.complete = true;
                 Poll::Ready(Ok(http::Response::from_parts(parts, recv_stream)))
             } else {
                 mem::replace(&mut task.waker, cx.waker().clone());
@@ -126,7 +130,7 @@ impl SendStream {
         Ok(self)
     }
 
-    pub fn send_data(&self, data: &[u8], end: bool) -> Result<(), Error> {
+    pub fn send_data(&mut self, data: &[u8], end: bool) -> Result<(), Error> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(err) = inner.assert_can_send_body(self.seq) {
             return Err(err);
@@ -141,6 +145,7 @@ pub struct RecvStream {
     inner: Arc<Mutex<Inner>>,
     seq: Seq,
     limiter: Limiter,
+    finished: bool,
 }
 
 impl RecvStream {
@@ -149,16 +154,28 @@ impl RecvStream {
             inner,
             seq,
             limiter,
+            finished: false,
         }
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        if self.finished {
+            return Ok(0);
+        }
         let mut reader = RecvReader::new(
             self.inner.clone(),
             self.seq,
             self.limiter.is_reusable_conn(),
         );
-        self.limiter.read_from(&mut reader, buf).await
+        let amount = self.limiter.read_from(&mut reader, buf).await?;
+        if amount == 0 {
+            self.finished = true;
+        }
+        Ok(amount)
+    }
+
+    pub fn is_end(&self) -> bool {
+        self.finished
     }
 }
 
@@ -185,6 +202,10 @@ impl RecvReader {
             if buf.is_empty() && !*task.end {
                 Poll::Pending
             } else {
+                if buf.is_empty() {
+                    task.info.complete = true;
+                    return Poll::Ready(Ok(0));
+                }
                 let max = buf.len().min(out.len());
                 (&mut out[0..max]).copy_from_slice(&buf[0..max]);
                 if max < buf.len() {
@@ -287,6 +308,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     type Output = io::Result<()>;
+
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let self_ = self.get_mut();
         let mut inner = self_.inner.lock().unwrap();
@@ -305,9 +327,7 @@ where
             }
 
             if let Some(task) = inner.tasks.task_for_state(cur_seq, state) {
-                let task_id = task.info().task_id;
-
-                let complete = match ready!(task.poll_connection(cx, &mut self_.io, &mut state)) {
+                match ready!(task.poll_connection(cx, &mut self_.io, &mut state)) {
                     Ok(v) => {
                         if inner.state != State::Ready && state == State::Ready {
                             inner.cur_seq += 1;
@@ -317,17 +337,14 @@ where
                     }
                     Err(err) => {
                         inner.mark_error(err);
-                        true // this task is complete
                     }
                 };
-
-                if complete {
-                    inner.tasks.remove(task_id);
-                }
             } else {
                 inner.conn_waker = Some(cx.waker().clone());
                 break Poll::Pending;
             }
+
+            inner.tasks.prune_completed();
         }
     }
 }
@@ -338,7 +355,7 @@ trait ConnectionPoll {
         cx: &mut Context,
         io: &mut S,
         state: &mut State,
-    ) -> Poll<io::Result<bool>>
+    ) -> Poll<io::Result<()>>
     where
         S: AsyncRead + AsyncWrite + Unpin;
 }
@@ -349,7 +366,7 @@ impl ConnectionPoll for SendReq {
         cx: &mut Context,
         io: &mut S,
         state: &mut State,
-    ) -> Poll<io::Result<bool>>
+    ) -> Poll<io::Result<()>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -367,7 +384,10 @@ impl ConnectionPoll for SendReq {
         } else {
             *state = State::SendBody;
         }
-        Poll::Ready(Ok(true))
+
+        self.info.complete = true;
+
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -377,7 +397,7 @@ impl ConnectionPoll for SendBody {
         cx: &mut Context,
         io: &mut S,
         state: &mut State,
-    ) -> Poll<io::Result<bool>>
+    ) -> Poll<io::Result<()>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -396,14 +416,12 @@ impl ConnectionPoll for SendBody {
             waker.wake();
         }
 
-        let task_complete = if *self.end {
+        if *self.end {
             *state = State::Waiting;
-            true
-        } else {
-            false
-        };
+            self.info.complete = true;
+        }
 
-        Poll::Ready(Ok(task_complete))
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -413,7 +431,7 @@ impl ConnectionPoll for RecvRes {
         cx: &mut Context,
         io: &mut S,
         state: &mut State,
-    ) -> Poll<io::Result<bool>>
+    ) -> Poll<io::Result<()>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -452,8 +470,7 @@ impl ConnectionPoll for RecvRes {
         // in theory we're now have a complete header ending \r\n\r\n
         self.waker.clone().wake();
 
-        // task is only complete when waker reads response
-        Poll::Ready(Ok(false))
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -463,7 +480,7 @@ impl ConnectionPoll for RecvBody {
         cx: &mut Context,
         io: &mut S,
         state: &mut State,
-    ) -> Poll<io::Result<bool>>
+    ) -> Poll<io::Result<()>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -482,8 +499,7 @@ impl ConnectionPoll for RecvBody {
 
         self.waker.clone().wake();
 
-        // task is complete when waker reads content
-        Poll::Ready(Ok(false))
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -493,7 +509,7 @@ impl ConnectionPoll for Task {
         cx: &mut Context,
         io: &mut S,
         state: &mut State,
-    ) -> Poll<io::Result<bool>>
+    ) -> Poll<io::Result<()>>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {

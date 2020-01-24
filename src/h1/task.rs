@@ -17,6 +17,7 @@ pub struct TaskId(pub usize);
 pub struct TaskInfo {
     pub seq: Seq,
     pub task_id: TaskId,
+    pub complete: bool,
 }
 
 impl TaskInfo {
@@ -24,6 +25,7 @@ impl TaskInfo {
         TaskInfo {
             seq,
             task_id: TaskId(0),
+            complete: false,
         }
     }
 }
@@ -190,8 +192,8 @@ impl Tasks {
         self.list.push(task);
     }
 
-    pub fn remove(&mut self, task_id: TaskId) {
-        self.list.retain(|t| t.info().task_id != task_id);
+    pub fn prune_completed(&mut self) {
+        self.list.retain(|t| !t.info().complete);
     }
 
     pub fn task_for_state(&mut self, seq: Seq, state: State) -> Option<&mut Task> {

@@ -11,7 +11,7 @@ pub async fn send_request_http1(
     //
     let send_req_clone = send_req.clone();
 
-    let h1 = send_req; // .ready().await?;
+    let mut h1 = send_req; // .ready().await?;
 
     let (parts, mut body_read) = req.into_parts();
     let req = http::Request::from_parts(parts, ());
