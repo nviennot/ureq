@@ -94,22 +94,25 @@ pub fn block_on<Ret, Fut: Future<Output = Ret>>(f: Fut) -> Ret {
 #[cfg(test)]
 mod test {
     use super::*;
+    use futures_util::io::AsyncReadExt;
     use tls_api_rustls::TlsConnector as RustlsTlsConnector;
 
     #[test]
     fn test_tls() -> Result<(), Error> {
         let req = http::Request::builder()
-            .uri("https://www.google.com/")
+            .uri("https://lookback.io/")
             // .header("accept-encoding", "gzip")
             .body(Body::empty())
             .expect("Build");
-        let body_s = block_on(async {
+        let body_s: Result<String, Error> = block_on(async {
             let conn = connect::<RustlsTlsConnector>(req.uri()).await?;
             let res = conn.send_request(req).await?;
             let (_, mut body) = res.into_parts();
-            body.as_string(5 * 1024 * 1024).await
-        })?;
-        println!("{}", body_s);
+            let mut buffer = String::with_capacity(4);
+            body.read_to_string(&mut buffer).await?;
+            Ok(buffer)
+        });
+        println!("{}", body_s?);
         Ok(())
     }
 
@@ -120,13 +123,15 @@ mod test {
             // .header("accept-encoding", "gzip")
             .body(Body::empty())
             .expect("Build");
-        let body_s = block_on(async {
+        let body_s: Result<String, Error> = block_on(async {
             let conn = connect::<PassTlsConnector>(req.uri()).await?;
             let res = conn.send_request(req).await?;
             let (_, mut body) = res.into_parts();
-            body.as_string(5 * 1024 * 1024).await
-        })?;
-        println!("{}", body_s);
+            let mut buffer = String::with_capacity(4);
+            body.read_to_string(&mut buffer).await?;
+            Ok(buffer)
+        });
+        println!("{}", body_s?);
         Ok(())
     }
 }

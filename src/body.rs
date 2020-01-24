@@ -16,7 +16,49 @@ use std::task::{Context, Poll};
 const BUF_SIZE: usize = 16_384;
 
 pub struct Body {
-    inner: BodyImpl,
+    decoder: BodyDecoder,
+}
+
+impl Body {
+    pub fn empty() -> Self {
+        Self::new(BodyImpl::RequestEmpty)
+    }
+    pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
+        Self::new(BodyImpl::RequestAsyncRead(Box::new(reader)))
+    }
+    pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
+        Self::new(BodyImpl::RequestRead(Box::new(reader)))
+    }
+    pub(crate) fn new(bimpl: BodyImpl) -> Self {
+        let reader = BodyReader::new(bimpl);
+        Body {
+            decoder: BodyDecoder::Plain(reader),
+        }
+    }
+
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        Ok(poll_fn(|cx| Pin::new(&mut *self).poll_read(cx, buf)).await?)
+    }
+
+    pub async fn into_connection(self) -> Result<Connection, Error> {
+        self.decoder.into_inner().into_connection().await
+    }
+}
+
+enum BodyDecoder {
+    Plain(BodyReader),
+}
+
+impl BodyDecoder {
+    fn into_inner(self) -> BodyReader {
+        match self {
+            BodyDecoder::Plain(r) => r,
+        }
+    }
+}
+
+struct BodyReader {
+    imp: BodyImpl,
     read_buf: Vec<u8>,
     read_buf_end: usize,
     leftover_bytes: Option<Bytes>,
@@ -31,19 +73,10 @@ pub enum BodyImpl {
     Http2(H2RecvStream, H2SendRequest<Bytes>),
 }
 
-impl Body {
-    pub fn empty() -> Self {
-        Self::new(BodyImpl::RequestEmpty)
-    }
-    pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
-        Self::new(BodyImpl::RequestAsyncRead(Box::new(reader)))
-    }
-    pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
-        Self::new(BodyImpl::RequestRead(Box::new(reader)))
-    }
-    pub(crate) fn new(inner: BodyImpl) -> Self {
-        Body {
-            inner,
+impl BodyReader {
+    fn new(imp: BodyImpl) -> Self {
+        BodyReader {
+            imp,
             read_buf: vec![0; BUF_SIZE],
             read_buf_end: 0,
             leftover_bytes: None,
@@ -51,14 +84,14 @@ impl Body {
         }
     }
 
-    pub async fn into_connection(mut self) -> Result<Connection, Error> {
+    async fn into_connection(mut self) -> Result<Connection, Error> {
         // http11 reuses the same connection, and we can't leave the body
         // half way through read.
         if self.is_http11() && !self.is_finished {
             self.read_to_end().await?;
         }
 
-        let conn = match self.inner {
+        let conn = match self.imp {
             BodyImpl::Http1(_, h1) => Connection::new(ProtocolImpl::Http1(h1)),
             BodyImpl::Http2(_, h2) => Connection::new(ProtocolImpl::Http2(h2)),
             _ => return Err(Error::Static("Can't do into_connection() on request body")),
@@ -68,7 +101,7 @@ impl Body {
     }
 
     fn is_http11(&self) -> bool {
-        match &self.inner {
+        match &self.imp {
             BodyImpl::Http1(_, _) => true,
             _ => false,
         }
@@ -85,7 +118,7 @@ impl Body {
         Ok(())
     }
 
-    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
         Ok(poll_fn(|cx| Pin::new(&mut *self).poll_read(cx, buf)).await?)
     }
 
@@ -100,36 +133,6 @@ impl Body {
         };
         self.leftover_bytes = remain;
         max
-    }
-
-    pub async fn as_vec(&mut self, max: usize) -> Result<Vec<u8>, Error> {
-        let mut vec = Vec::new();
-        let mut total_read = 0;
-        loop {
-            let remaining_reserved = vec.len() - total_read;
-            if remaining_reserved < 128 {
-                if vec.len() == max {
-                    // we can't grow vec any more
-                    return Err(Error::Message(format!("Reached max to read: {}", max)));
-                }
-                // reserve more space, but only up to max
-                let reserve_to_size = (vec.len() + BUF_SIZE).min(max);
-                vec.resize(reserve_to_size, 0);
-            }
-            let amount = self.read(&mut vec[total_read..]).await?;
-            if amount == 0 {
-                break;
-            }
-            total_read += amount;
-        }
-        // size down if we reserved too much
-        vec.resize(total_read, 0);
-        Ok(vec)
-    }
-
-    pub async fn as_string(&mut self, max: usize) -> Result<String, Error> {
-        let bytes = self.as_vec(max).await?;
-        Ok(String::from_utf8_lossy(&bytes).to_string())
     }
 
     fn do_poll_fill(&mut self, cx: &mut Context) -> Poll<io::Result<usize>> {
@@ -159,7 +162,7 @@ impl Body {
             let amount = self.bytes_to_buf(data, buf);
             return Ok(amount).into();
         }
-        let read = match &mut self.inner {
+        let read = match &mut self.imp {
             BodyImpl::RequestEmpty => 0,
             BodyImpl::RequestAsyncRead(reader) => ready!(Pin::new(reader).poll_read(cx, buf))?,
             BodyImpl::RequestRead(reader) => reader.read(buf)?,
@@ -184,7 +187,7 @@ impl Body {
     }
 }
 
-impl AsyncRead for Body {
+impl AsyncRead for BodyReader {
     fn poll_read(
         self: Pin<&mut Self>,
         cx: &mut Context,
@@ -209,7 +212,7 @@ impl AsyncRead for Body {
     }
 }
 
-impl AsyncBufRead for Body {
+impl AsyncBufRead for BodyReader {
     fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
         let this = self.get_mut();
         let available = ready!(this.do_poll_fill(cx))?;
@@ -257,5 +260,33 @@ impl From<Vec<u8>> for Body {
     fn from(bytes: Vec<u8>) -> Self {
         let cursor = io::Cursor::new(bytes);
         Body::from_sync_read(cursor)
+    }
+}
+
+impl AsyncRead for Body {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        match &mut this.decoder {
+            BodyDecoder::Plain(r) => Pin::new(r).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncBufRead for Body {
+    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
+        let this = self.get_mut();
+        match &mut this.decoder {
+            BodyDecoder::Plain(r) => Pin::new(r).poll_fill_buf(cx),
+        }
+    }
+    fn consume(self: Pin<&mut Self>, amount: usize) {
+        let this = self.get_mut();
+        match &mut this.decoder {
+            BodyDecoder::Plain(r) => Pin::new(r).consume(amount),
+        }
     }
 }
