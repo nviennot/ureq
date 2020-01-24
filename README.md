@@ -8,8 +8,6 @@ What are we doing?
 
 * [x] Parse URL (http)
 * [x] Set request headers (http)
-  * [ ] Username/password
-  * [ ] authorization header
 * [x] Request/response body
 * [x] Resolve DNS (dns-lookup)
 * [ ] Timeout for entire request.
@@ -17,13 +15,24 @@ What are we doing?
 * [x] Wrap socket in SSL (tls-api)
 * [x] Talk http1 (write own h1, httparse)
 * [x] Talk http2 (h2)
-* [ ] Ergonomic body methods
+* [ ] Sniff default tokio runtime?
+* [ ] Set tokio Runtime
+* [ ] Explore http::Request extension mechanic
+* [ ] Ergonomic RequestExt
+  * [x] Query parameters
+  * [ ] Username/password
+  * [ ] authorization header
+  * [ ] Serialize JSON
+* [ ] Ergonomic body
+  * [x] AsyncRead
+  * [ ] Read to Vec
+  * [ ] Read to String
+  * [ ] Read to JSON
 * Body data transformations
   * [x] chunked encoding (my own)
   * [ ] x-www-form-urlencoded (write it?)
   * [ ] form-data (multipart) (write it?)
-* [x] Query parameters
-* Content decoder
+* Content decoding
   * [x] character sets
   * [x] gzip
 * Content encoding
