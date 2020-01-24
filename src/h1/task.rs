@@ -91,7 +91,7 @@ pub struct SendReq {
 }
 
 impl SendReq {
-    pub fn from_req(seq: Seq, req: http::Request<()>, end: bool) -> Result<Self, Error> {
+    pub fn from_request(seq: Seq, req: http::Request<()>, end: bool) -> Result<Self, Error> {
         let mut req_buf = vec![0; HEADER_BUF_SIZE];
         let size = write_http11_req(&req, &mut req_buf[..])?;
         req_buf.resize(size, 0);
@@ -154,15 +154,17 @@ pub struct RecvBody {
     pub info: TaskInfo,
     pub buf: Vec<u8>,
     pub end: End,
+    pub reuse_conn: bool,
     pub waker: Waker,
 }
 
 impl RecvBody {
-    pub fn new(seq: Seq, waker: Waker) -> Self {
+    pub fn new(seq: Seq, reuse_conn: bool, waker: Waker) -> Self {
         RecvBody {
             info: TaskInfo::new(seq),
             buf: Vec::with_capacity(RECV_BODY_SIZE),
             end: End(false),
+            reuse_conn,
             waker,
         }
     }

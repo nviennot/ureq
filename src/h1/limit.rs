@@ -38,7 +38,7 @@ impl UntilEnd {
 }
 
 impl Limiter {
-    pub fn from_res(res: &http::Response<()>) -> Self {
+    pub fn from_response(res: &http::Response<()>) -> Self {
         let transfer_enc_chunk = res
             .headers()
             .get("transfer-encoding")
@@ -59,6 +59,14 @@ impl Limiter {
         } else {
             Limiter::UntilEnd(UntilEnd)
         }
+    }
+
+    pub fn is_reusable_conn(&self) -> bool {
+        // limiters read to stream end can't reuse connection.
+        if let Limiter::UntilEnd(_) = self {
+            return false;
+        }
+        true
     }
 
     pub async fn read_from(

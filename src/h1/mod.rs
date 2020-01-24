@@ -48,7 +48,7 @@ impl SendRequest {
             let mut inner = self.inner.lock().unwrap();
             let seq = Seq(inner.next_seq);
             inner.next_seq += 1;
-            let task = SendReq::from_req(seq, req, end)?;
+            let task = SendReq::from_request(seq, req, end)?;
             inner.enqueue(task);
             seq
         };
@@ -79,7 +79,7 @@ impl Future for FutureResponse {
         if let Some(task) = inner.tasks.get_recv_res(self.seq) {
             let res = task.try_parse()?;
             if let Some(res) = res {
-                let limiter = Limiter::from_res(&res);
+                let limiter = Limiter::from_response(&res);
                 let recv_stream = RecvStream::new(self.inner.clone(), self.seq, limiter);
                 let (parts, _) = res.into_parts();
                 Poll::Ready(Ok(http::Response::from_parts(parts, recv_stream)))
@@ -153,7 +153,11 @@ impl RecvStream {
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        let mut reader = RecvReader::new(self.inner.clone(), self.seq);
+        let mut reader = RecvReader::new(
+            self.inner.clone(),
+            self.seq,
+            self.limiter.is_reusable_conn(),
+        );
         self.limiter.read_from(&mut reader, buf).await
     }
 }
@@ -161,11 +165,16 @@ impl RecvStream {
 pub(crate) struct RecvReader {
     inner: Arc<Mutex<Inner>>,
     seq: Seq,
+    reuse_conn: bool,
 }
 
 impl RecvReader {
-    fn new(inner: Arc<Mutex<Inner>>, seq: Seq) -> Self {
-        RecvReader { inner, seq }
+    fn new(inner: Arc<Mutex<Inner>>, seq: Seq, reuse_conn: bool) -> Self {
+        RecvReader {
+            inner,
+            seq,
+            reuse_conn,
+        }
     }
 
     fn poll_read(&self, cx: &mut Context, out: &mut [u8]) -> Poll<Result<usize, Error>> {
@@ -185,7 +194,7 @@ impl RecvReader {
                 Poll::Ready(Ok(max))
             }
         } else {
-            let task = RecvBody::new(self.seq, cx.waker().clone());
+            let task = RecvBody::new(self.seq, self.reuse_conn, cx.waker().clone());
             inner.enqueue(task);
             Poll::Pending
         }
@@ -254,7 +263,7 @@ impl Inner {
         if self.cur_seq > *seq {
             return Some(Error::Static("Can't send body for old request"));
         }
-        if self.state != State::SendBody {
+        if self.cur_seq == *seq && self.state != State::SendBody {
             let message = format!("Can't send body in state: {:?}", self.state);
             return Some(Error::Message(message));
         }
@@ -464,7 +473,11 @@ impl ConnectionPoll for RecvBody {
 
         if amount == 0 {
             mem::replace(&mut self.end, End(true));
-            *state = State::Ready;
+            if self.reuse_conn {
+                *state = State::Ready;
+            } else {
+                *state = State::Closed;
+            }
         }
 
         self.waker.clone().wake();
