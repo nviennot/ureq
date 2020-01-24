@@ -1,6 +1,9 @@
 use super::chunked::{ChunkedDecoder, ChunkedEncoder};
 use super::Error;
 use super::RecvReader;
+use futures_util::ready;
+use std::io;
+use std::task::{Context, Poll};
 
 pub(crate) enum LimitRead {
     ChunkedDecoder(ChunkedDecoder),
@@ -40,15 +43,28 @@ impl LimitRead {
         true
     }
 
-    pub async fn read_from(
+    // pub async fn read_from(
+    //     &mut self,
+    //     recv: &mut RecvReader,
+    //     buf: &mut [u8],
+    // ) -> Result<usize, Error> {
+    //     match self {
+    //         LimitRead::ChunkedDecoder(v) => v.read_chunk(recv, buf).await,
+    //         LimitRead::ContenLength(v) => v.read_from(recv, buf).await,
+    //         LimitRead::UntilEnd(v) => v.read_from(recv, buf).await,
+    //     }
+    // }
+
+    pub fn poll_read(
         &mut self,
+        cx: &mut Context,
         recv: &mut RecvReader,
         buf: &mut [u8],
-    ) -> Result<usize, Error> {
+    ) -> Poll<io::Result<usize>> {
         match self {
-            LimitRead::ChunkedDecoder(v) => v.read_chunk(recv, buf).await,
-            LimitRead::ContenLength(v) => v.read_from(recv, buf).await,
-            LimitRead::UntilEnd(v) => v.read_from(recv, buf).await,
+            LimitRead::ChunkedDecoder(v) => v.poll_read(cx, recv, buf),
+            LimitRead::ContenLength(v) => v.poll_read(cx, recv, buf),
+            LimitRead::UntilEnd(v) => v.poll_read(cx, recv, buf),
         }
     }
 }
@@ -62,23 +78,33 @@ impl ContentLengthRead {
     fn new(limit: u64) -> Self {
         ContentLengthRead { limit, total: 0 }
     }
-    async fn read_from(&mut self, recv: &mut RecvReader, buf: &mut [u8]) -> Result<usize, Error> {
+    fn poll_read(
+        &mut self,
+        cx: &mut Context,
+        recv: &mut RecvReader,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
         let left = (self.limit - self.total).min(usize::max_value() as u64) as usize;
         if left == 0 {
-            return Ok(0);
+            return Ok(0).into();
         }
         let max = buf.len().min(left);
-        let amount = recv.read(&mut buf[0..max]).await?;
+        let amount = ready!(recv.poll_read(cx, &mut buf[0..max]))?;
         self.total += amount as u64;
-        Ok(amount)
+        Ok(amount).into()
     }
 }
 
 pub struct UntilEnd;
 
 impl UntilEnd {
-    async fn read_from(&mut self, recv: &mut RecvReader, buf: &mut [u8]) -> Result<usize, Error> {
-        recv.read(&mut buf[..]).await
+    fn poll_read(
+        &mut self,
+        cx: &mut Context,
+        recv: &mut RecvReader,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        recv.poll_read(cx, &mut buf[..])
     }
 }
 

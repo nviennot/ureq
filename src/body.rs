@@ -1,13 +1,17 @@
 use crate::conn::ProtocolImpl;
 use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
+use crate::AsyncRead;
 use crate::Connection;
 use crate::Error;
-use crate::{AsyncRead, AsyncReadExt};
 use bytes::Bytes;
+use futures_util::future::poll_fn;
+use futures_util::ready;
 use h2::client::SendRequest as H2SendRequest;
 use h2::RecvStream as H2RecvStream;
 use std::io;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 const BUF_SIZE: usize = 16_384;
 
@@ -78,33 +82,7 @@ impl Body {
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        assert!(!buf.is_empty(), "Can't read with an empty buf");
-        if self.is_finished || buf.is_empty() {
-            return Ok(0);
-        }
-        // h2 streams might have leftovers to use up before reading any more.
-        if let Some(data) = self.leftovers.take() {
-            let amount = self.bytes_to_buf(data, buf);
-            return Ok(amount);
-        }
-        let read = match &mut self.inner {
-            BodyImpl::RequestEmpty => 0,
-            BodyImpl::RequestAsyncRead(reader) => reader.read(buf).await?,
-            BodyImpl::RequestRead(reader) => reader.read(buf)?,
-            BodyImpl::Http1(recv, _) => recv.read(buf).await?,
-            BodyImpl::Http2(recv, _) => {
-                if let Some(data) = recv.data().await {
-                    let data = data?;
-                    self.bytes_to_buf(data, buf)
-                } else {
-                    0
-                }
-            }
-        };
-        if read == 0 {
-            self.is_finished = true;
-        }
-        Ok(read)
+        Ok(poll_fn(|cx| Pin::new(&mut *self).poll_read(cx, buf)).await?)
     }
 
     // helper to shuffle Bytes into a &[u8] and handle the remains.
@@ -148,6 +126,46 @@ impl Body {
     pub async fn as_string(&mut self, max: usize) -> Result<String, Error> {
         let bytes = self.as_vec(max).await?;
         Ok(String::from_utf8_lossy(&bytes).to_string())
+    }
+}
+
+impl AsyncRead for Body {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if this.is_finished || buf.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
+        // h2 streams might have leftovers to use up before reading any more.
+        if let Some(data) = this.leftovers.take() {
+            let amount = this.bytes_to_buf(data, buf);
+            return Ok(amount).into();
+        }
+        let read = match &mut this.inner {
+            BodyImpl::RequestEmpty => 0,
+            BodyImpl::RequestAsyncRead(reader) => ready!(Pin::new(reader).poll_read(cx, buf))?,
+            BodyImpl::RequestRead(reader) => reader.read(buf)?,
+            BodyImpl::Http1(recv, _) => ready!(recv.poll_read(cx, buf))?,
+            BodyImpl::Http2(recv, _) => {
+                if let Some(data) = ready!(recv.poll_data(cx)) {
+                    let data = data.map_err(|e| {
+                        e.into_io().unwrap_or_else(|| {
+                            io::Error::new(io::ErrorKind::Other, "Other h2 error")
+                        })
+                    })?;
+                    this.bytes_to_buf(data, buf)
+                } else {
+                    0
+                }
+            }
+        };
+        if read == 0 {
+            this.is_finished = true;
+        }
+        Poll::Ready(Ok(read))
     }
 }
 

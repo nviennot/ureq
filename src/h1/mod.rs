@@ -167,20 +167,24 @@ impl RecvStream {
         }
     }
 
-    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+    pub fn poll_read(&mut self, cx: &mut Context, buf: &mut [u8]) -> Poll<io::Result<usize>> {
         if self.finished {
-            return Ok(0);
+            return Ok(0).into();
         }
         let mut reader = RecvReader::new(
             self.inner.clone(),
             self.seq,
             self.limiter.is_reusable_conn(),
         );
-        let amount = self.limiter.read_from(&mut reader, buf).await?;
+        let amount = ready!(self.limiter.poll_read(cx, &mut reader, buf))?;
         if amount == 0 {
             self.finished = true;
         }
-        Ok(amount)
+        Ok(amount).into()
+    }
+
+    pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        Ok(poll_fn(|cx| self.poll_read(cx, buf)).await?)
     }
 
     pub fn is_end(&self) -> bool {
@@ -203,7 +207,7 @@ impl RecvReader {
         }
     }
 
-    fn poll_read(&self, cx: &mut Context, out: &mut [u8]) -> Poll<Result<usize, Error>> {
+    pub fn poll_read(&self, cx: &mut Context, out: &mut [u8]) -> Poll<io::Result<usize>> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(task) = inner.tasks.get_recv_body(self.seq) {
             task.waker = cx.waker().clone();
@@ -238,9 +242,9 @@ impl RecvReader {
         }
     }
 
-    pub async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
-        poll_fn(|cx| self.poll_read(cx, buf)).await
-    }
+    // pub async fn read(&self, buf: &mut [u8]) -> Result<usize, Error> {
+    //     poll_fn(|cx| self.poll_read(cx, buf)).await
+    // }
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]

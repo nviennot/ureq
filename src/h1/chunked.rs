@@ -1,60 +1,100 @@
 use super::Error;
 use super::RecvReader;
+use futures_util::ready;
 use std::io;
 use std::io::Write;
+use std::task::{Context, Poll};
 
 pub(crate) struct ChunkedDecoder {
     amount_left: usize,
-    pub(crate) is_finished: bool,
+    state: DecoderState,
+    chunk_size_buf: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DecoderState {
+    ChunkSize,
+    ChunkSizeLf,
+    Chunk,
+    ChunkLf,
+    End,
 }
 
 impl ChunkedDecoder {
     pub fn new() -> Self {
         ChunkedDecoder {
             amount_left: 0,
-            is_finished: false,
+            state: DecoderState::ChunkSize,
+            chunk_size_buf: Vec::with_capacity(32),
         }
     }
 
-    pub async fn read_chunk(
+    pub fn poll_read(
         &mut self,
+        cx: &mut Context,
         recv: &mut RecvReader,
         buf: &mut [u8],
-    ) -> Result<usize, Error> {
-        if self.is_finished {
-            return Ok(0);
-        }
-        if self.amount_left == 0 {
-            let chunk_size = self.read_chunk_size(recv, buf).await?;
-            trace!("Chunk size: {}", chunk_size);
-            if chunk_size == 0 {
-                self.is_finished = true;
-                return Ok(0);
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            match self.state {
+                DecoderState::ChunkSize => {
+                    ready!(self.poll_chunk_size(cx, recv))?;
+                    let chunk_size_s = String::from_utf8_lossy(&self.chunk_size_buf[..]);
+                    self.amount_left = usize::from_str_radix(chunk_size_s.trim(), 16)
+                        .ok()
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::InvalidData, "Not a number in chunk size")
+                        })?;
+
+                    trace!("Chunk size: {}", self.amount_left);
+
+                    // reset for next time.
+                    self.chunk_size_buf.resize(0, 0);
+
+                    if self.amount_left == 0 {
+                        self.state = DecoderState::End;
+                    } else {
+                        self.state = DecoderState::ChunkSizeLf;
+                    }
+                }
+                DecoderState::ChunkSizeLf => {
+                    ready!(self.poll_skip_until_lf(cx, recv)?);
+                    self.state = DecoderState::Chunk;
+                }
+                DecoderState::Chunk => {
+                    let to_read = self.amount_left.min(buf.len());
+                    let amount_read = ready!(recv.poll_read(cx, &mut buf[0..to_read]))?;
+                    self.amount_left -= amount_read;
+                    trace!("Chunk read: {} left: {}", amount_read, self.amount_left);
+                    if self.amount_left == 0 {
+                        // chunk is over, read next chunk
+                        self.state = DecoderState::ChunkLf;
+                    }
+                    return Poll::Ready(Ok(amount_read));
+                }
+                DecoderState::ChunkLf => {
+                    ready!(self.poll_skip_until_lf(cx, recv)?);
+                    self.state = DecoderState::ChunkSize;
+                }
+                DecoderState::End => return Poll::Ready(Ok(0)),
             }
-            self.amount_left = chunk_size;
         }
-        let to_read = self.amount_left.min(buf.len());
-        let amount_read = recv.read(&mut buf[0..to_read]).await?;
-        self.amount_left -= amount_read;
-        if self.amount_left == 0 {
-            // skip \r\n after the chunk
-            self.skip_until_lf(recv).await?;
-        }
-        Ok(to_read)
     }
 
     // 3\r\nhel\r\nb\r\nlo world!!!\r\n0\r\n\r\n
-    async fn read_chunk_size(
-        &mut self,
-        recv: &mut RecvReader,
-        buf: &mut [u8],
-    ) -> Result<usize, Error> {
+    fn poll_chunk_size(&mut self, cx: &mut Context, recv: &mut RecvReader) -> Poll<io::Result<()>> {
         // read until we get a non-numeric character. this could be
         // either \r or maybe a ; if we are using "extensions"
-        let mut pos = 0;
+        let mut one = [0_u8; 1];
         loop {
-            recv.read(&mut buf[pos..=pos]).await?;
-            let c: char = buf[pos].into();
+            let amount = ready!(recv.poll_read(cx, &mut one[..]))?;
+            if amount == 0 {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "EOF while reading chunk size",
+                )));
+            }
+            let c: char = one[0].into();
             // keep reading until we get ; or \r
             if c == ';' || c == '\r' {
                 break;
@@ -78,52 +118,42 @@ impl ChunkedDecoder {
             {
                 // good
             } else {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("Unexpected char in chunk size: {:?}", c),
-                )
-                .into());
+                let m = format!("Unexpected char in chunk size: {:?}", c);
+                return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, m)));
             }
-            pos += 1;
-            if pos > 10 {
+            self.chunk_size_buf.push(one[0]);
+            if self.chunk_size_buf.len() > 10 {
                 // something is wrong.
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Too many chars in number",
-                )
-                .into());
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Too many chars in chunk size",
+                )));
             }
         }
-
-        self.skip_until_lf(recv).await?;
-
-        // no length, no number to parse.
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        // parse the read numbers as a chunk size.
-        let chunk_size_s = String::from_utf8_lossy(&buf[0..pos]);
-        let chunk_size = usize::from_str_radix(chunk_size_s.trim(), 16)
-            .ok()
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "Not a number in chunk size")
-            })?;
-
-        Ok(chunk_size)
+        Poll::Ready(Ok(()))
     }
 
     // skip until we get a \n
-    async fn skip_until_lf(&mut self, recv: &mut RecvReader) -> Result<(), Error> {
+    fn poll_skip_until_lf(
+        &mut self,
+        cx: &mut Context,
+        recv: &mut RecvReader,
+    ) -> Poll<io::Result<()>> {
         // skip until we get a \n
         let mut one = [0_u8; 1];
         loop {
-            recv.read(&mut one[..]).await?;
+            let amount = ready!(recv.poll_read(cx, &mut one[..]))?;
+            if amount == 0 {
+                return Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "EOF before finding lf",
+                )));
+            }
             if one[0] == b'\n' {
                 break;
             }
         }
-        Ok(())
+        Poll::Ready(Ok(()))
     }
 }
 

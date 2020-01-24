@@ -22,7 +22,6 @@ mod uri;
 
 pub use crate::error::Error;
 pub(crate) use futures_io::{AsyncRead, AsyncWrite};
-pub(crate) use futures_util::io::AsyncReadExt;
 pub use http;
 
 use crate::async_impl::exec::AsyncImpl;
@@ -101,6 +100,7 @@ mod test {
     fn test_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("https://www.google.com/")
+            // .header("accept-encoding", "gzip")
             .body(Body::empty())
             .expect("Build");
         let body_s = block_on(async {
@@ -117,6 +117,7 @@ mod test {
     fn test_no_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("http://www.google.com/")
+            // .header("accept-encoding", "gzip")
             .body(Body::empty())
             .expect("Build");
         let body_s = block_on(async {
