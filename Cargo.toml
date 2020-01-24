@@ -16,7 +16,10 @@ async-std = [
 tokio = [
     "tokio-exe",
 ]
-gzip = ["async-compression"]
+gzip = [
+    "async-compression",
+    "flate2"
+]
 
 
 [dependencies]
@@ -38,12 +41,13 @@ async-std-lib = { package = "async-std", version = "*", optional = true }
 
 # We always need a tokio impl also for async-std because tlsapi is using tokio traits.
 ## async-std
-tokio-min = { package = "tokio", version = "0.2", features = [], optional = true }
+tokio-min = { package = "tokio", version = "0.2", default-features = false, optional = true }
 ## tokio
-tokio-exe = { package = "tokio", version = "0.2", features = ["rt-core", "tcp", "dns"], optional = true }
+tokio-exe = { package = "tokio", version = "0.2", default-features = false, features = ["rt-core", "tcp", "dns"], optional = true }
 
 ## gzip
-async-compression = { version = "0.2.0", default-features = false, features = ["gzip", "futures-bufread"], optional = true }
+async-compression = { version = "*", default-features = false, features = ["gzip", "futures-bufread"], optional = true }
+flate2 = { version = "*", default-features = false, features = [], optional = true }
 
 [dev-dependencies]
 tls-api-rustls = "*"

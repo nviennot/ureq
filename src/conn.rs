@@ -1,3 +1,4 @@
+use crate::body::ContentEncoding;
 use crate::conn_http1::send_request_http1;
 use crate::conn_http2::send_request_http2;
 use crate::h1::SendRequest as H1SendRequest;
@@ -41,6 +42,12 @@ impl Connection {
         self,
         req: http::Request<Body>,
     ) -> Result<http::Response<Body>, Error> {
+        // resolve deferred body codec now that we know the headers.
+        let (parts, mut body) = req.into_parts();
+        let content_encoding = ContentEncoding::from_headers(&parts.headers, false);
+        body.resolve_deferred(content_encoding);
+        let req = http::Request::from_parts(parts, body);
+
         match self.p {
             ProtocolImpl::Http2(send_req) => send_request_http2(send_req, req).await,
             ProtocolImpl::Http1(send_req) => send_request_http1(send_req, req).await,

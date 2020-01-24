@@ -24,7 +24,7 @@ What are we doing?
 * [x] Query parameters
 * [ ] Content encoding
   * [ ] character sets
-  * [ ] gzip
+  * [x] gzip
 * [ ] Retry logic
 * [ ] Connection pooling
 * [ ] Cookie state in connection (cookie)
