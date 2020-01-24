@@ -21,7 +21,7 @@ mod tokio;
 mod uri;
 
 pub use crate::error::Error;
-pub(crate) use futures_io::{AsyncRead, AsyncWrite};
+pub(crate) use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
 pub use http;
 
 use crate::async_impl::exec::AsyncImpl;
