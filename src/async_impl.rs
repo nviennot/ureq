@@ -5,8 +5,8 @@ use std::future::Future;
 #[cfg(feature = "async-std")]
 pub mod exec {
     use super::*;
-    use async_impl::task;
     use async_std_lib::net::TcpStream;
+    use async_std_lib::task;
 
     pub struct AsyncImpl;
 
