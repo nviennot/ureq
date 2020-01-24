@@ -1,17 +1,24 @@
-use crate::http11::{try_parse_http11, write_http11_req};
-use crate::{AsyncRead, AsyncWrite, Error};
+mod chunked;
+mod error;
+mod http11;
+mod limit;
+mod task;
+
+pub use error::Error;
+pub(crate) use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future::poll_fn;
+pub(crate) use futures_util::io::AsyncReadExt;
 use futures_util::ready;
+use http11::try_parse_http11;
 use std::future::Future;
 use std::io;
 use std::mem;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
+use task::{End, RecvBody, RecvRes, SendBody, SendReq, Seq, Task, Tasks};
 
 const RECV_BODY_SIZE: usize = 16_384;
-const HEADER_BUF_SIZE: usize = 1024;
 
 pub fn handshake<S>(io: S) -> (SendRequest, Connection<S>)
 where
@@ -42,10 +49,7 @@ impl SendRequest {
             let mut inner = self.inner.lock().unwrap();
             let seq = Seq(inner.next_seq);
             inner.next_seq += 1;
-            let mut req_header = vec![0; HEADER_BUF_SIZE];
-            let size = write_http11_req(&req, &mut req_header[..])?;
-            req_header.resize(size, 0);
-            let task = Task::SendReq(TaskInfo::new(seq), req_header, End(end));
+            let task = SendReq::from_req(seq, req, end)?;
             inner.enqueue(task);
             seq
         };
@@ -73,7 +77,7 @@ impl Future for FutureResponse {
         if let Some(err) = inner.get_remote_error() {
             return Poll::Ready(Err(err));
         }
-        if let Some(Task::RecvRes(_, buf, waker)) = inner.tasks.get_recv_res(self.seq) {
+        if let Some(RecvRes { buf, waker, .. }) = inner.tasks.get_recv_res(self.seq) {
             if let Some((req, used_bytes)) = try_parse_http11(&buf[..])? {
                 assert_eq!(used_bytes, buf.len(), "Used bytes doesn't match buf len");
                 let recv_stream = RecvStream::new(self.inner.clone(), self.seq);
@@ -84,11 +88,7 @@ impl Future for FutureResponse {
                 Poll::Pending
             }
         } else {
-            let task = Task::RecvRes(
-                TaskInfo::new(self.seq),
-                Vec::with_capacity(HEADER_BUF_SIZE),
-                cx.waker().clone(),
-            );
+            let task = RecvRes::new(self.seq, cx.waker().clone());
             inner.enqueue(task);
             Poll::Pending
         }
@@ -113,8 +113,8 @@ impl SendStream {
         if let Some(err) = inner.assert_can_send_body(self.seq) {
             return Poll::Ready(Err(err));
         }
-        if let Some(Task::SendBody(_, _, _, waker)) = inner.tasks.get_send_body(self.seq) {
-            waker.replace(cx.waker().clone());
+        if let Some(SendBody { send_waker, .. }) = inner.tasks.get_send_body(self.seq) {
+            send_waker.replace(cx.waker().clone());
             Poll::Pending
         } else {
             Poll::Ready(Ok(()))
@@ -131,7 +131,7 @@ impl SendStream {
         if let Some(err) = inner.assert_can_send_body(self.seq) {
             return Err(err);
         }
-        let task = Task::SendBody(TaskInfo::new(self.seq), data.to_owned(), End(end), None);
+        let task = SendBody::new(self.seq, data.to_owned(), end);
         inner.enqueue(task);
         Ok(())
     }
@@ -149,7 +149,10 @@ impl RecvStream {
 
     fn poll_for_content(&self, cx: &mut Context, out: &mut [u8]) -> Poll<Result<usize, Error>> {
         let mut inner = self.inner.lock().unwrap();
-        if let Some(Task::RecvBody(_, buf, end, waker)) = inner.tasks.get_recv_body(self.seq) {
+        if let Some(RecvBody {
+            buf, end, waker, ..
+        }) = inner.tasks.get_recv_body(self.seq)
+        {
             mem::replace(waker, cx.waker().clone());
             if buf.is_empty() && !**end {
                 Poll::Pending
@@ -161,12 +164,7 @@ impl RecvStream {
                 Poll::Ready(Ok(max))
             }
         } else {
-            let task = Task::RecvBody(
-                TaskInfo::new(self.seq),
-                Vec::with_capacity(RECV_BODY_SIZE),
-                End(false),
-                cx.waker().clone(),
-            );
+            let task = RecvBody::new(self.seq, cx.waker().clone());
             inner.enqueue(task);
             Poll::Pending
         }
@@ -191,141 +189,6 @@ enum State {
     Closed,
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct Seq(usize);
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct End(bool);
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct TaskId(usize);
-
-impl Deref for Seq {
-    type Target = usize;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Deref for End {
-    type Target = bool;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Deref for TaskId {
-    type Target = usize;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-struct TaskInfo(Seq, TaskId);
-
-impl TaskInfo {
-    fn new(seq: Seq) -> Self {
-        TaskInfo(seq, TaskId(0))
-    }
-}
-
-#[allow(clippy::large_enum_variant)]
-enum Task {
-    SendReq(TaskInfo, Vec<u8>, End),
-    SendBody(TaskInfo, Vec<u8>, End, Option<Waker>),
-    RecvRes(TaskInfo, Vec<u8>, Waker),
-    RecvBody(TaskInfo, Vec<u8>, End, Waker),
-}
-
-impl Task {
-    fn task_info(&self) -> &TaskInfo {
-        match self {
-            Task::SendReq(ti, _, _) => ti,
-            Task::SendBody(ti, _, _, _) => ti,
-            Task::RecvRes(ti, _, _) => ti,
-            Task::RecvBody(ti, _, _, _) => ti,
-        }
-    }
-
-    fn task_info_mut(&mut self) -> &mut TaskInfo {
-        match self {
-            Task::SendReq(ti, _, _) => ti,
-            Task::SendBody(ti, _, _, _) => ti,
-            Task::RecvRes(ti, _, _) => ti,
-            Task::RecvBody(ti, _, _, _) => ti,
-        }
-    }
-
-    fn is_send_req(&self) -> bool {
-        if let Task::SendReq(_, _, _) = self {
-            return true;
-        }
-        false
-    }
-
-    fn is_send_body(&self) -> bool {
-        if let Task::SendBody(_, _, _, _) = self {
-            return true;
-        }
-        false
-    }
-
-    fn is_recv_res(&self) -> bool {
-        if let Task::RecvRes(_, _, _) = self {
-            return true;
-        }
-        false
-    }
-
-    fn is_recv_body(&self) -> bool {
-        if let Task::RecvBody(_, _, _, _) = self {
-            return true;
-        }
-        false
-    }
-}
-
-struct Tasks(usize, Vec<Task>);
-
-impl Tasks {
-    fn new() -> Self {
-        Tasks(0, vec![])
-    }
-
-    fn push(&mut self, mut task: Task) {
-        let task_id = self.0;
-        self.0 += 1;
-        task.task_info_mut().1 = TaskId(task_id);
-        self.1.push(task);
-    }
-
-    fn remove(&mut self, task_id: TaskId) {
-        self.1.retain(|t| t.task_info().1 != task_id);
-    }
-
-    fn get_send_req(&mut self, seq: Seq) -> Option<&mut Task> {
-        self.1
-            .iter_mut()
-            .find(|t| t.task_info().0 == seq && t.is_send_req())
-    }
-
-    fn get_send_body(&mut self, seq: Seq) -> Option<&mut Task> {
-        self.1
-            .iter_mut()
-            .find(|t| t.task_info().0 == seq && t.is_send_body())
-    }
-
-    fn get_recv_res(&mut self, seq: Seq) -> Option<&mut Task> {
-        self.1
-            .iter_mut()
-            .find(|t| t.task_info().0 == seq && t.is_recv_res())
-    }
-
-    fn get_recv_body(&mut self, seq: Seq) -> Option<&mut Task> {
-        self.1
-            .iter_mut()
-            .find(|t| t.task_info().0 == seq && t.is_recv_body())
-    }
-}
-
 struct Inner {
     next_seq: usize,
     cur_seq: usize,
@@ -347,8 +210,8 @@ impl Inner {
         }
     }
 
-    fn enqueue(&mut self, task: Task) {
-        self.tasks.push(task);
+    fn enqueue<T: Into<Task>>(&mut self, task: T) {
+        self.tasks.push(task.into());
         if let Some(waker) = self.conn_waker.take() {
             waker.wake();
         }
@@ -402,8 +265,8 @@ where
             match &mut inner.state {
                 State::Ready => {
                     let task = inner.tasks.get_send_req(cur_seq);
-                    let to_remove = if let Some(Task::SendReq(info, req, end)) = task {
-                        let task_id_to_remove = info.1;
+                    let to_remove = if let Some(SendReq { info, req, end }) = task {
+                        let task_id_to_remove = info.task_id;
                         let res = ready!(Pin::new(&mut self_.io).poll_write(cx, &req[..]));
                         match res {
                             Ok(amount) => {
@@ -430,9 +293,15 @@ where
                     inner.tasks.remove(to_remove);
                 }
                 State::SendBody => {
-                    let task = inner.tasks.get_send_req(cur_seq);
-                    let to_remove = if let Some(Task::SendBody(info, body, end, waker)) = task {
-                        let task_id_to_remove = info.1;
+                    let task = inner.tasks.get_send_body(cur_seq);
+                    let to_remove = if let Some(SendBody {
+                        info,
+                        body,
+                        end,
+                        send_waker,
+                    }) = task
+                    {
+                        let task_id_to_remove = info.task_id;
                         let res = ready!(Pin::new(&mut self_.io).poll_write(cx, &body[..]));
                         match res {
                             Ok(amount) => {
@@ -443,7 +312,7 @@ where
                                 }
                                 // entire current send_body was sent, waker is for a
                                 // someone potentially waiting to send more.
-                                if let Some(waker) = waker.take() {
+                                if let Some(waker) = send_waker.take() {
                                     waker.wake();
                                 }
                                 if **end {
@@ -463,8 +332,8 @@ where
                 }
                 State::Waiting => {
                     let task = inner.tasks.get_recv_res(cur_seq);
-                    let to_remove = if let Some(Task::RecvRes(info, buf, waker)) = task {
-                        let task_id_to_remove = info.1;
+                    let to_remove = if let Some(RecvRes { info, buf, waker }) = task {
+                        let task_id_to_remove = info.task_id;
                         const END_OF_HEADER: &[u8] = &[b'\r', b'\n', b'\r', b'\n'];
                         let mut end_index = 0;
                         let mut buf_index = 0;
@@ -517,8 +386,14 @@ where
                 State::RecvBody => {
                     let task = inner.tasks.get_recv_body(cur_seq);
                     let mut do_remove = false;
-                    let to_remove = if let Some(Task::RecvBody(info, buf, end, waker)) = task {
-                        let task_id_to_remove = info.1;
+                    let to_remove = if let Some(RecvBody {
+                        info,
+                        buf,
+                        end,
+                        waker,
+                    }) = task
+                    {
+                        let task_id_to_remove = info.task_id;
                         buf.resize(RECV_BODY_SIZE, 0);
                         let res = ready!(Pin::new(&mut self_.io).poll_read(cx, &mut buf[..]));
                         match res {

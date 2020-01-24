@@ -1,35 +1,32 @@
-use crate::peek::Peekable;
-use crate::Error;
-use crate::Stream;
-use crate::{AsyncReadExt, AsyncWriteExt};
+use super::AsyncReadExt;
+use super::Error;
+use super::RecvStream;
 use std::io;
 
 /// Decode AsyncRead as transfer-encoding chunked.
 pub struct ChunkedDecoder {
-    stream: Peekable<Box<dyn Stream>>,
     amount_left: usize,
     pub(crate) is_finished: bool,
 }
 
 impl ChunkedDecoder {
-    pub fn new(stream: Peekable<Box<dyn Stream>>) -> Self {
+    pub fn new() -> Self {
         ChunkedDecoder {
-            stream,
             amount_left: 0,
             is_finished: false,
         }
     }
 
-    pub fn into_inner(self) -> Peekable<Box<dyn Stream>> {
-        self.stream
-    }
-
-    pub async fn read_chunk(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    pub async fn read_chunk(
+        &mut self,
+        recv: &mut RecvStream,
+        buf: &mut [u8],
+    ) -> Result<usize, Error> {
         if self.is_finished {
             return Ok(0);
         }
         if self.amount_left == 0 {
-            let chunk_size = self.read_chunk_size(buf).await?;
+            let chunk_size = self.read_chunk_size(recv, buf).await?;
             if chunk_size == 0 {
                 self.is_finished = true;
                 return Ok(0);
@@ -37,22 +34,26 @@ impl ChunkedDecoder {
             self.amount_left = chunk_size;
         }
         let to_read = self.amount_left.min(buf.len());
-        self.amount_left -= to_read;
-        self.stream.read_exact(&mut buf[0..to_read]).await?;
+        let amount_read = recv.read(&mut buf[0..to_read]).await?;
+        self.amount_left -= amount_read;
         if self.amount_left == 0 {
             // skip \r\n after the chunk
-            self.skip_until_lf().await?;
+            self.skip_until_lf(recv).await?;
         }
         Ok(to_read)
     }
 
     // 3\r\nhel\r\nb\r\nlo world!!!\r\n0\r\n\r\n
-    async fn read_chunk_size(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+    async fn read_chunk_size(
+        &mut self,
+        recv: &mut RecvStream,
+        buf: &mut [u8],
+    ) -> Result<usize, Error> {
         // read until we get a non-numeric character. this could be
         // either \r or maybe a ; if we are using "extensions"
         let mut pos = 0;
         loop {
-            self.stream.read_exact(&mut buf[pos..=pos]).await?;
+            recv.read(&mut buf[pos..=pos]).await?;
             let c: char = buf[pos].into();
             // keep reading until we get ; or \r
             if c == ';' || c == '\r' {
@@ -61,7 +62,7 @@ impl ChunkedDecoder {
             pos += 1;
         }
 
-        self.skip_until_lf().await?;
+        self.skip_until_lf(recv).await?;
 
         // no length, no number to parse.
         if buf.is_empty() {
@@ -80,11 +81,11 @@ impl ChunkedDecoder {
     }
 
     // skip until we get a \n
-    async fn skip_until_lf(&mut self) -> io::Result<()> {
+    async fn skip_until_lf(&mut self, recv: &mut RecvStream) -> Result<(), Error> {
         // skip until we get a \n
         let mut one = [0_u8; 1];
         loop {
-            self.stream.read_exact(&mut one[..]).await?;
+            recv.read(&mut one[..]).await?;
             if one[0] == b'\n' {
                 break;
             }
@@ -93,21 +94,21 @@ impl ChunkedDecoder {
     }
 }
 
-/// Transfer encoding chunked to an AsyncWrite
-pub struct ChunkedEncoder;
+// /// Transfer encoding chunked to an AsyncWrite
+// pub struct ChunkedEncoder;
 
-impl ChunkedEncoder {
-    pub async fn send_chunk(buf: &[u8], stream: &mut impl Stream) -> Result<(), Error> {
-        let header = format!("{}\r\n", buf.len()).into_bytes();
-        stream.write_all(&header[..]).await?;
-        stream.write_all(&buf[..]).await?;
-        const CRLF: &[u8] = b"\r\n";
-        stream.write_all(CRLF).await?;
-        Ok(())
-    }
-    pub async fn send_finish(stream: &mut impl Stream) -> Result<(), Error> {
-        const END: &[u8] = b"0\r\n\r\n";
-        stream.write_all(END).await?;
-        Ok(())
-    }
-}
+// impl ChunkedEncoder {
+//     pub async fn send_chunk(buf: &[u8], stream: &mut impl Stream) -> Result<(), Error> {
+//         let header = format!("{}\r\n", buf.len()).into_bytes();
+//         stream.write_all(&header[..]).await?;
+//         stream.write_all(&buf[..]).await?;
+//         const CRLF: &[u8] = b"\r\n";
+//         stream.write_all(CRLF).await?;
+//         Ok(())
+//     }
+//     pub async fn send_finish(stream: &mut impl Stream) -> Result<(), Error> {
+//         const END: &[u8] = b"0\r\n\r\n";
+//         stream.write_all(END).await?;
+//         Ok(())
+//     }
+// }

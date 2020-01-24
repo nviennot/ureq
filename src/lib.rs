@@ -5,18 +5,14 @@ extern crate log;
 
 mod async_impl;
 mod body;
-mod chunked;
 mod conn;
 mod conn_http1;
-mod conn_http11;
+// mod conn_http11;
 mod conn_http2;
 mod dlog;
 mod either;
 mod error;
 pub mod h1;
-mod http11;
-mod limit;
-mod peek;
 mod proto;
 mod req_ext;
 mod tls;
@@ -26,16 +22,14 @@ mod uri;
 
 pub use crate::error::Error;
 pub(crate) use futures_io::{AsyncRead, AsyncWrite};
-pub(crate) use futures_util::io::{AsyncReadExt, AsyncWriteExt};
+pub(crate) use futures_util::io::AsyncReadExt;
 pub use http;
-pub(crate) const PARSE_BUF_SIZE: usize = 16_384;
 
 use crate::async_impl::exec::AsyncImpl;
 pub use crate::body::Body;
 pub use crate::conn::Connection;
 use crate::conn::ProtocolImpl;
 use crate::either::Either;
-use crate::peek::Peekable;
 use crate::proto::Protocol;
 pub use crate::req_ext::{RequestBuilderExt, RequestExt};
 use crate::tls::wrap_tls;
@@ -90,10 +84,7 @@ pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connect
                 trace!("Error in connection: {:?}", err);
             }
         });
-        unimplemented!()
-        // let boxed: Box<dyn Stream> = Box::new(stream);
-        // let peekable = Peekable::new(boxed, crate::PARSE_BUF_SIZE);
-        // Ok(Connection::new(ProtocolImpl::Http11(peekable)))
+        Ok(Connection::new(ProtocolImpl::Http1(h1)))
     }
 }
 

@@ -1,15 +1,12 @@
-use crate::chunked::ChunkedDecoder;
 use crate::conn::ProtocolImpl;
+use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
-use crate::limit::LimitRead;
-use crate::peek::Peekable;
 use crate::Connection;
 use crate::Error;
-use crate::Stream;
 use crate::{AsyncRead, AsyncReadExt};
 use bytes::Bytes;
 use h2::client::SendRequest as H2SendRequest;
-use h2::RecvStream;
+use h2::RecvStream as H2RecvStream;
 use std::io;
 
 const BUF_SIZE: usize = 16_384;
@@ -24,11 +21,8 @@ pub enum BodyImpl {
     RequestEmpty,
     RequestAsyncRead(Box<dyn AsyncRead + Unpin + Send>),
     RequestRead(Box<dyn io::Read + Send>),
-    Http1(H1SendRequest),
-    Http11Chunked(ChunkedDecoder),
-    Http11Limited(LimitRead),
-    Http11Unlimited(Peekable<Box<dyn Stream>>),
-    Http2(RecvStream, H2SendRequest<Bytes>),
+    Http1(H1RecvStream, H1SendRequest),
+    Http2(H2RecvStream, H2SendRequest<Bytes>),
 }
 
 impl Body {
@@ -57,15 +51,7 @@ impl Body {
         }
 
         let conn = match self.inner {
-            BodyImpl::Http11Chunked(decoder) => {
-                Connection::new(ProtocolImpl::Http11(decoder.into_inner()))
-            }
-            BodyImpl::Http11Limited(limiter) => {
-                Connection::new(ProtocolImpl::Http11(limiter.into_inner()))
-            }
-            BodyImpl::Http11Unlimited(_) => Connection::new(ProtocolImpl::Unusable {
-                reason: "Previous response did not contain a content-length header.",
-            }),
+            BodyImpl::Http1(_, h1) => Connection::new(ProtocolImpl::Http1(h1)),
             BodyImpl::Http2(_, h2) => Connection::new(ProtocolImpl::Http2(h2)),
             _ => return Err(Error::Static("Can't do into_connection() on request body")),
         };
@@ -75,9 +61,7 @@ impl Body {
 
     fn is_http11(&self) -> bool {
         match &self.inner {
-            BodyImpl::Http11Chunked(_) => true,
-            BodyImpl::Http11Limited(_) => true,
-            BodyImpl::Http11Unlimited(_) => true,
+            BodyImpl::Http1(_, _) => true,
             _ => false,
         }
     }
@@ -107,10 +91,7 @@ impl Body {
             BodyImpl::RequestEmpty => 0,
             BodyImpl::RequestAsyncRead(reader) => reader.read(buf).await?,
             BodyImpl::RequestRead(reader) => reader.read(buf)?,
-            BodyImpl::Http1(_) => 0,
-            BodyImpl::Http11Chunked(decoder) => decoder.read_chunk(buf).await?,
-            BodyImpl::Http11Limited(limiter) => limiter.read(buf).await?,
-            BodyImpl::Http11Unlimited(stream) => stream.read(buf).await?,
+            BodyImpl::Http1(recv, _) => recv.read(buf).await?,
             BodyImpl::Http2(recv, _) => {
                 if let Some(data) = recv.data().await {
                     let data = data?;

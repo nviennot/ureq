@@ -11,12 +11,12 @@ pub async fn send_request_http1(
     //
     let send_req_clone = send_req.clone();
 
-    let mut h2 = send_req; // .ready().await?;
+    let h1 = send_req; // .ready().await?;
 
     let (parts, mut body_read) = req.into_parts();
     let req = http::Request::from_parts(parts, ());
 
-    let (fut_res, mut send_body) = h2.send_request(req, false)?;
+    let (fut_res, mut send_body) = h1.send_request(req, false)?;
 
     let mut buf = vec![0_u8; BUF_SIZE];
     loop {
@@ -34,7 +34,7 @@ pub async fn send_request_http1(
 
     let (parts, res_body) = fut_res.await?.into_parts();
 
-    let res_body = Body::new(BodyImpl::Http1(send_req_clone));
+    let res_body = Body::new(BodyImpl::Http1(res_body, send_req_clone));
     let res = http::Response::from_parts(parts, res_body);
 
     Ok(res)
