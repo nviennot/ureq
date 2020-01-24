@@ -1,5 +1,6 @@
 use super::http11::{try_parse_http11, write_http11_req};
 use super::Error;
+use super::State;
 use std::ops::Deref;
 use std::task::Waker;
 
@@ -134,6 +135,19 @@ impl RecvRes {
             waker,
         }
     }
+
+    pub fn try_parse(&self) -> Result<Option<http::Response<()>>, Error> {
+        if let Some((req, used_bytes)) = try_parse_http11(&self.buf[..])? {
+            assert_eq!(
+                used_bytes,
+                self.buf.len(),
+                "Used bytes doesn't match buf len"
+            );
+            Ok(Some(req))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 pub struct RecvBody {
@@ -178,17 +192,20 @@ impl Tasks {
         self.list.retain(|t| t.info().task_id != task_id);
     }
 
+    pub fn task_for_state(&mut self, seq: Seq, state: State) -> Option<&mut Task> {
+        match state {
+            State::Ready => self.get_task(seq, Task::is_send_req),
+            State::SendBody => self.get_task(seq, Task::is_send_body),
+            State::Waiting => self.get_task(seq, Task::is_recv_res),
+            State::RecvBody => self.get_task(seq, Task::is_recv_body),
+            State::Closed => None,
+        }
+    }
+
     fn get_task<F: Fn(&Task) -> bool>(&mut self, seq: Seq, func: F) -> Option<&mut Task> {
         self.list
             .iter_mut()
             .find(|t| t.info().seq == seq && (func)(t))
-    }
-
-    pub fn get_send_req(&mut self, seq: Seq) -> Option<&mut SendReq> {
-        match self.get_task(seq, Task::is_send_req) {
-            Some(Task::SendReq(t)) => Some(t),
-            _ => None,
-        }
     }
 
     pub fn get_send_body(&mut self, seq: Seq) -> Option<&mut SendBody> {
