@@ -535,15 +535,12 @@ impl ConnectionPoll for RecvBody {
         let amount = ready!(read)?;
         self.buf.resize(cur_len + amount, 0);
 
-        if log_enabled!(log::Level::Trace) {
-            let max = self.buf.len().min(30);
-            trace!(
-                "RecvBody amount: {} buf size: {} {:?}",
-                amount,
-                self.buf.len(),
-                String::from_utf8_lossy(&self.buf[0..max])
-            );
-        }
+        trace!(
+            "RecvBody read_max: {} amount: {} buf size: {}",
+            self.read_max,
+            amount,
+            self.buf.len(),
+        );
 
         if amount == 0 {
             mem::replace(&mut self.end, End(true));
