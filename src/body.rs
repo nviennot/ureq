@@ -17,7 +17,7 @@ const BUF_SIZE: usize = 16_384;
 
 pub struct Body {
     inner: BodyImpl,
-    leftovers: Option<Bytes>,
+    leftover_bytes: Option<Bytes>,
     is_finished: bool,
 }
 
@@ -42,7 +42,7 @@ impl Body {
     pub(crate) fn new(inner: BodyImpl) -> Self {
         Body {
             inner,
-            leftovers: None,
+            leftover_bytes: None,
             is_finished: false,
         }
     }
@@ -94,7 +94,7 @@ impl Body {
         } else {
             None
         };
-        self.leftovers = remain;
+        self.leftover_bytes = remain;
         max
     }
 
@@ -137,10 +137,10 @@ impl AsyncRead for Body {
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
         if this.is_finished || buf.is_empty() {
-            return Poll::Ready(Ok(0));
+            return Ok(0).into();
         }
         // h2 streams might have leftovers to use up before reading any more.
-        if let Some(data) = this.leftovers.take() {
+        if let Some(data) = this.leftover_bytes.take() {
             let amount = this.bytes_to_buf(data, buf);
             return Ok(amount).into();
         }
@@ -165,7 +165,7 @@ impl AsyncRead for Body {
         if read == 0 {
             this.is_finished = true;
         }
-        Poll::Ready(Ok(read))
+        Ok(read).into()
     }
 }
 

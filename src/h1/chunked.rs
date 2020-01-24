@@ -70,13 +70,13 @@ impl ChunkedDecoder {
                         // chunk is over, read next chunk
                         self.state = DecoderState::ChunkLf;
                     }
-                    return Poll::Ready(Ok(amount_read));
+                    return Ok(amount_read).into();
                 }
                 DecoderState::ChunkLf => {
                     ready!(self.poll_skip_until_lf(cx, recv)?);
                     self.state = DecoderState::ChunkSize;
                 }
-                DecoderState::End => return Poll::Ready(Ok(0)),
+                DecoderState::End => return Ok(0).into(),
             }
         }
     }
@@ -89,10 +89,11 @@ impl ChunkedDecoder {
         loop {
             let amount = ready!(recv.poll_read(cx, &mut one[..]))?;
             if amount == 0 {
-                return Poll::Ready(Err(io::Error::new(
+                return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "EOF while reading chunk size",
-                )));
+                ))
+                .into();
             }
             let c: char = one[0].into();
             // keep reading until we get ; or \r
@@ -119,18 +120,19 @@ impl ChunkedDecoder {
                 // good
             } else {
                 let m = format!("Unexpected char in chunk size: {:?}", c);
-                return Poll::Ready(Err(io::Error::new(io::ErrorKind::InvalidData, m)));
+                return Err(io::Error::new(io::ErrorKind::InvalidData, m)).into();
             }
             self.chunk_size_buf.push(one[0]);
             if self.chunk_size_buf.len() > 10 {
                 // something is wrong.
-                return Poll::Ready(Err(io::Error::new(
+                return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Too many chars in chunk size",
-                )));
+                ))
+                .into();
             }
         }
-        Poll::Ready(Ok(()))
+        Ok(()).into()
     }
 
     // skip until we get a \n
@@ -144,16 +146,17 @@ impl ChunkedDecoder {
         loop {
             let amount = ready!(recv.poll_read(cx, &mut one[..]))?;
             if amount == 0 {
-                return Poll::Ready(Err(io::Error::new(
+                return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "EOF before finding lf",
-                )));
+                ))
+                .into();
             }
             if one[0] == b'\n' {
                 break;
             }
         }
-        Poll::Ready(Ok(()))
+        Ok(()).into()
     }
 }
 

@@ -75,7 +75,7 @@ impl Future for ResponseFuture {
         let mut inner = self.inner.lock().unwrap();
 
         if let Some(err) = inner.get_remote_error() {
-            return Poll::Ready(Err(err));
+            return Err(err).into();
         }
 
         if let Some(task) = inner.tasks.get_recv_res(self.seq) {
@@ -85,7 +85,7 @@ impl Future for ResponseFuture {
                 let recv_stream = RecvStream::new(self.inner.clone(), self.seq, limiter);
                 let (parts, _) = res.into_parts();
                 task.info.complete = true;
-                Poll::Ready(Ok(http::Response::from_parts(parts, recv_stream)))
+                Ok(http::Response::from_parts(parts, recv_stream)).into()
             } else {
                 task.waker = cx.waker().clone();
                 Poll::Pending
@@ -116,16 +116,16 @@ impl SendStream {
     fn poll_can_send_data(&self, cx: &mut Context) -> Poll<Result<(), Error>> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(err) = inner.get_remote_error() {
-            return Poll::Ready(Err(err));
+            return Err(err).into();
         }
         if let Some(err) = inner.assert_can_send_body(self.seq) {
-            return Poll::Ready(Err(err));
+            return Err(err).into();
         }
         if let Some(task) = inner.tasks.get_send_body(self.seq) {
             task.send_waker.replace(cx.waker().clone());
             Poll::Pending
         } else {
-            Poll::Ready(Ok(()))
+            Ok(()).into()
         }
     }
 
@@ -215,7 +215,7 @@ impl RecvReader {
             if buf.is_empty() {
                 if task.end {
                     task.read_max = 0;
-                    Poll::Ready(Ok(0))
+                    Ok(0).into()
                 } else {
                     task.read_max = out.len();
                     inner.try_wake_conn();
@@ -232,7 +232,7 @@ impl RecvReader {
                     task.buf = buf.split_off(max);
                     task.read_max = out.len() - task.buf.len();
                 }
-                Poll::Ready(Ok(max))
+                Ok(max).into()
             }
         } else {
             let mut task = RecvBody::new(self.seq, self.reuse_conn, cx.waker().clone());
@@ -354,9 +354,9 @@ where
                 if let Some(e) = inner.error.as_mut() {
                     let repl = io::Error::new(e.kind(), Error::Message(e.to_string()));
                     let orig = mem::replace(e, repl);
-                    return Poll::Ready(Err(orig));
+                    return Err(orig).into();
                 } else {
-                    return Poll::Ready(Ok(()));
+                    return Ok(()).into();
                 }
             }
 
@@ -427,7 +427,7 @@ impl ConnectionPoll for SendReq {
 
         self.info.complete = true;
 
-        Poll::Ready(Ok(()))
+        Ok(()).into()
     }
 }
 
@@ -460,7 +460,7 @@ impl ConnectionPoll for SendBody {
             self.info.complete = true;
         }
 
-        Poll::Ready(Ok(()))
+        Ok(()).into()
     }
 }
 
@@ -483,10 +483,11 @@ impl ConnectionPoll for RecvRes {
                 // read one more char
                 let amount = ready!(Pin::new(&mut &mut *io).poll_read(cx, &mut one[..]))?;
                 if amount == 0 {
-                    return Poll::Ready(Err(io::Error::new(
+                    return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         "EOF before complete http11 header",
-                    )));
+                    ))
+                    .into();
                 }
                 self.buf.push(one[0]);
             }
@@ -509,7 +510,7 @@ impl ConnectionPoll for RecvRes {
         // in theory we're now have a complete header ending \r\n\r\n
         self.waker.clone().wake();
 
-        Poll::Ready(Ok(()))
+        Ok(()).into()
     }
 }
 
@@ -553,7 +554,7 @@ impl ConnectionPoll for RecvBody {
         }
 
         self.waker.clone().wake();
-        Poll::Ready(Ok(()))
+        Ok(()).into()
     }
 }
 

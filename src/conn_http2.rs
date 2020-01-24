@@ -1,6 +1,7 @@
 use crate::body::{Body, BodyImpl};
 use crate::Error;
 use bytes::Bytes;
+use futures_util::future::poll_fn;
 use h2::client::SendRequest;
 
 const BUF_SIZE: usize = 16_384;
@@ -29,8 +30,10 @@ pub async fn send_request_http2(
         loop {
             let left_to_send = amount_read - amount_sent;
             send_body.reserve_capacity(left_to_send);
-            let fut_cap = PollCapacity(&mut send_body);
-            let actual_capacity = fut_cap.await?;
+            let actual_capacity = poll_fn(|cx| send_body.poll_capacity(cx))
+                .await
+                .ok_or_else(|| Error::Static("Stream gone before capacity"))??;
+            // let actual_capacity = fut_cap.await?;
             send_body.send_data(
                 // h2::SendStream lacks a sync or async function that allows us
                 // to send borrowed data. This copy is unfortunate.
@@ -52,20 +55,4 @@ pub async fn send_request_http2(
     let res = http::Response::from_parts(parts, res_body);
 
     Ok(res)
-}
-
-struct PollCapacity<'a>(&'a mut h2::SendStream<Bytes>);
-
-use std::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
-
-impl<'a> Future for PollCapacity<'a> {
-    type Output = Result<usize, h2::Error>;
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match Pin::new(&mut self.get_mut().0).poll_capacity(cx) {
-            Poll::Ready(Some(res)) => Poll::Ready(res),
-            Poll::Ready(None) | Poll::Pending => Poll::Pending,
-        }
-    }
 }

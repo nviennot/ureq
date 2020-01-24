@@ -34,7 +34,7 @@ impl Future for ReadyState {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut lock = self.0.lock().unwrap();
         if let Some(res) = lock.result.take() {
-            Poll::Ready(res)
+            res.into()
         } else {
             lock.waker = Some(cx.waker().clone());
             Poll::Pending
