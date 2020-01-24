@@ -96,9 +96,9 @@ pub struct SendReq {
 }
 
 impl SendReq {
-    pub fn from_request(seq: Seq, req: http::Request<()>, end: bool) -> Result<Self, Error> {
+    pub fn from_request(seq: Seq, req: &http::Request<()>, end: bool) -> Result<Self, Error> {
         let mut req_buf = vec![0; HEADER_BUF_SIZE];
-        let size = write_http11_req(&req, &mut req_buf[..])?;
+        let size = write_http11_req(req, &mut req_buf[..])?;
         req_buf.resize(size, 0);
         Ok(SendReq {
             info: TaskInfo::new(seq),

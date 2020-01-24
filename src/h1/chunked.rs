@@ -1,8 +1,8 @@
 use super::Error;
 use super::RecvReader;
 use std::io;
+use std::io::Write;
 
-/// Decode AsyncRead as transfer-encoding chunked.
 pub(crate) struct ChunkedDecoder {
     amount_left: usize,
     pub(crate) is_finished: bool,
@@ -127,21 +127,22 @@ impl ChunkedDecoder {
     }
 }
 
-// /// Transfer encoding chunked to an AsyncWrite
-// pub struct ChunkedEncoder;
+pub struct ChunkedEncoder;
 
-// impl ChunkedEncoder {
-//     pub async fn send_chunk(buf: &[u8], stream: &mut impl Stream) -> Result<(), Error> {
-//         let header = format!("{}\r\n", buf.len()).into_bytes();
-//         stream.write_all(&header[..]).await?;
-//         stream.write_all(&buf[..]).await?;
-//         const CRLF: &[u8] = b"\r\n";
-//         stream.write_all(CRLF).await?;
-//         Ok(())
-//     }
-//     pub async fn send_finish(stream: &mut impl Stream) -> Result<(), Error> {
-//         const END: &[u8] = b"0\r\n\r\n";
-//         stream.write_all(END).await?;
-//         Ok(())
-//     }
-// }
+impl ChunkedEncoder {
+    pub fn write_chunk(buf: &[u8], out: &mut Vec<u8>) -> Result<(), Error> {
+        let mut cur = io::Cursor::new(out);
+        let header = format!("{}\r\n", buf.len()).into_bytes();
+        cur.write_all(&header[..])?;
+        cur.write_all(&buf[..])?;
+        const CRLF: &[u8] = b"\r\n";
+        cur.write_all(CRLF)?;
+        Ok(())
+    }
+    pub fn write_finish(out: &mut Vec<u8>) -> Result<(), Error> {
+        const END: &[u8] = b"0\r\n\r\n";
+        let mut cur = io::Cursor::new(out);
+        cur.write_all(END)?;
+        Ok(())
+    }
+}

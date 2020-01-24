@@ -8,7 +8,7 @@ pub use error::Error;
 pub(crate) use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future::poll_fn;
 use futures_util::ready;
-use limit::Limiter;
+use limit::{LimitRead, LimitWrite};
 use std::future::Future;
 use std::io;
 use std::mem;
@@ -46,12 +46,13 @@ impl SendRequest {
             let mut inner = self.inner.lock().unwrap();
             let seq = Seq(inner.next_seq);
             inner.next_seq += 1;
-            let task = SendReq::from_request(seq, req, end)?;
+            let task = SendReq::from_request(seq, &req, end)?;
             inner.enqueue(task);
             seq
         };
         let fut_response = ResponseFuture::new(self.inner.clone(), seq);
-        let send_stream = SendStream::new(self.inner.clone(), seq);
+        let limiter = LimitWrite::from_request(&req);
+        let send_stream = SendStream::new(self.inner.clone(), seq, limiter);
         Ok((fut_response, send_stream))
     }
 }
@@ -80,7 +81,7 @@ impl Future for ResponseFuture {
         if let Some(task) = inner.tasks.get_recv_res(self.seq) {
             let res = task.try_parse()?;
             if let Some(res) = res {
-                let limiter = Limiter::from_response(&res);
+                let limiter = LimitRead::from_response(&res);
                 let recv_stream = RecvStream::new(self.inner.clone(), self.seq, limiter);
                 let (parts, _) = res.into_parts();
                 task.info.complete = true;
@@ -100,11 +101,16 @@ impl Future for ResponseFuture {
 pub struct SendStream {
     inner: Arc<Mutex<Inner>>,
     seq: Seq,
+    limiter: LimitWrite,
 }
 
 impl SendStream {
-    fn new(inner: Arc<Mutex<Inner>>, seq: Seq) -> Self {
-        SendStream { inner, seq }
+    fn new(inner: Arc<Mutex<Inner>>, seq: Seq, limiter: LimitWrite) -> Self {
+        SendStream {
+            inner,
+            seq,
+            limiter,
+        }
     }
 
     fn poll_can_send_data(&self, cx: &mut Context) -> Poll<Result<(), Error>> {
@@ -133,7 +139,12 @@ impl SendStream {
         if let Some(err) = inner.assert_can_send_body(self.seq) {
             return Err(err);
         }
-        let task = SendBody::new(self.seq, data.to_owned(), end);
+        let mut out = Vec::with_capacity(data.len() + self.limiter.overhead());
+        self.limiter.write(data, &mut out)?;
+        if end {
+            self.limiter.finish(&mut out)?;
+        }
+        let task = SendBody::new(self.seq, out, end);
         inner.enqueue(task);
         Ok(())
     }
@@ -142,12 +153,12 @@ impl SendStream {
 pub struct RecvStream {
     inner: Arc<Mutex<Inner>>,
     seq: Seq,
-    limiter: Limiter,
+    limiter: LimitRead,
     finished: bool,
 }
 
 impl RecvStream {
-    fn new(inner: Arc<Mutex<Inner>>, seq: Seq, limiter: Limiter) -> Self {
+    fn new(inner: Arc<Mutex<Inner>>, seq: Seq, limiter: LimitRead) -> Self {
         Self {
             inner,
             seq,
