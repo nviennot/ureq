@@ -1,4 +1,4 @@
-use crate::body::{Body, BodyImpl};
+use crate::body::{Body, BodyImpl, ContentEncoding};
 use crate::Error;
 use bytes::Bytes;
 use futures_util::future::poll_fn;
@@ -49,9 +49,15 @@ pub async fn send_request_http2(
     // Send end_of_stream
     send_body.send_data(Bytes::new(), true)?;
 
-    let (parts, res_body) = fut_res.await?.into_parts();
+    let res = fut_res.await?;
 
-    let res_body = Body::new(BodyImpl::Http2(res_body, send_req_clone));
+    trace!("Got h2 response: {:?}", res);
+
+    let (parts, res_body) = res.into_parts();
+
+    let content_encoding = ContentEncoding::from_headers(&parts.headers);
+
+    let res_body = Body::new(BodyImpl::Http2(res_body, send_req_clone), content_encoding);
     let res = http::Response::from_parts(parts, res_body);
 
     Ok(res)

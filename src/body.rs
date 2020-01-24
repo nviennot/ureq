@@ -13,6 +13,9 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+#[cfg(feature = "gzip")]
+use async_compression::futures::bufread::GzipDecoder;
+
 const BUF_SIZE: usize = 16_384;
 
 pub struct Body {
@@ -21,19 +24,28 @@ pub struct Body {
 
 impl Body {
     pub fn empty() -> Self {
-        Self::new(BodyImpl::RequestEmpty)
+        Self::new(BodyImpl::RequestEmpty, ContentEncoding::Plain)
     }
     pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
-        Self::new(BodyImpl::RequestAsyncRead(Box::new(reader)))
+        Self::new(
+            BodyImpl::RequestAsyncRead(Box::new(reader)),
+            ContentEncoding::Plain,
+        )
     }
     pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
-        Self::new(BodyImpl::RequestRead(Box::new(reader)))
+        Self::new(
+            BodyImpl::RequestRead(Box::new(reader)),
+            ContentEncoding::Plain,
+        )
     }
-    pub(crate) fn new(bimpl: BodyImpl) -> Self {
+    pub(crate) fn new(bimpl: BodyImpl, decoder_kind: ContentEncoding) -> Self {
         let reader = BodyReader::new(bimpl);
-        Body {
-            decoder: BodyDecoder::Plain(reader),
-        }
+        let decoder = match decoder_kind {
+            ContentEncoding::Plain => BodyDecoder::Plain(reader),
+            #[cfg(feature = "gzip")]
+            ContentEncoding::Gzip => BodyDecoder::Gzip(GzipDecoder::new(reader)),
+        };
+        Body { decoder }
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
@@ -45,14 +57,42 @@ impl Body {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentEncoding {
+    Plain,
+    #[cfg(feature = "gzip")]
+    Gzip,
+}
+
+impl ContentEncoding {
+    pub fn from_headers(headers: &http::header::HeaderMap) -> ContentEncoding {
+        match headers
+            .get("content-encoding")
+            .and_then(|v| v.to_str().ok())
+        {
+            None => ContentEncoding::Plain,
+            #[cfg(feature = "gzip")]
+            Some("gzip") => ContentEncoding::Gzip,
+            Some(v) => {
+                error!("Unsupported content-encoding: {}", v);
+                ContentEncoding::Plain
+            }
+        }
+    }
+}
+
 enum BodyDecoder {
     Plain(BodyReader),
+    #[cfg(feature = "gzip")]
+    Gzip(GzipDecoder<BodyReader>),
 }
 
 impl BodyDecoder {
     fn into_inner(self) -> BodyReader {
         match self {
             BodyDecoder::Plain(r) => r,
+            #[cfg(feature = "gzip")]
+            BodyDecoder::Gzip(r) => r.into_inner(),
         }
     }
 }
@@ -272,21 +312,8 @@ impl AsyncRead for Body {
         let this = self.get_mut();
         match &mut this.decoder {
             BodyDecoder::Plain(r) => Pin::new(r).poll_read(cx, buf),
-        }
-    }
-}
-
-impl AsyncBufRead for Body {
-    fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<&[u8]>> {
-        let this = self.get_mut();
-        match &mut this.decoder {
-            BodyDecoder::Plain(r) => Pin::new(r).poll_fill_buf(cx),
-        }
-    }
-    fn consume(self: Pin<&mut Self>, amount: usize) {
-        let this = self.get_mut();
-        match &mut this.decoder {
-            BodyDecoder::Plain(r) => Pin::new(r).consume(amount),
+            #[cfg(feature = "gzip")]
+            BodyDecoder::Gzip(r) => Pin::new(r).poll_read(cx, buf),
         }
     }
 }

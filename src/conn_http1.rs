@@ -1,4 +1,4 @@
-use crate::body::{Body, BodyImpl};
+use crate::body::{Body, BodyImpl, ContentEncoding};
 use crate::h1::SendRequest;
 use crate::Error;
 
@@ -34,7 +34,9 @@ pub async fn send_request_http1(
 
     let (parts, res_body) = fut_res.await?.into_parts();
 
-    let res_body = Body::new(BodyImpl::Http1(res_body, send_req_clone));
+    let content_encoding = ContentEncoding::from_headers(&parts.headers);
+
+    let res_body = Body::new(BodyImpl::Http1(res_body, send_req_clone), content_encoding);
     let res = http::Response::from_parts(parts, res_body);
 
     Ok(res)

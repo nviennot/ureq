@@ -101,7 +101,7 @@ mod test {
     fn test_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("https://lookback.io/")
-            // .header("accept-encoding", "gzip")
+            .header("accept-encoding", "gzip")
             .body(Body::empty())
             .expect("Build");
         let body_s: Result<String, Error> = block_on(async {
