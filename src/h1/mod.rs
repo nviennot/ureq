@@ -17,8 +17,6 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 use task::{End, RecvBody, RecvRes, SendBody, SendReq, Seq, Task, Tasks};
 
-const RECV_BODY_SIZE: usize = 16_384;
-
 pub fn handshake<S>(io: S) -> (SendRequest, Connection<S>)
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -199,23 +197,32 @@ impl RecvReader {
         if let Some(task) = inner.tasks.get_recv_body(self.seq) {
             mem::replace(&mut task.waker, cx.waker().clone());
             let buf = &mut task.buf;
-            if buf.is_empty() && !*task.end {
-                Poll::Pending
-            } else {
-                if buf.is_empty() {
-                    task.info.complete = true;
-                    return Poll::Ready(Ok(0));
+            if buf.is_empty() {
+                if *task.end {
+                    task.read_max = 0;
+                    Poll::Ready(Ok(0))
+                } else {
+                    task.read_max = out.len();
+                    inner.try_wake_conn();
+                    Poll::Pending
                 }
+            } else {
                 let max = buf.len().min(out.len());
                 (&mut out[0..max]).copy_from_slice(&buf[0..max]);
-                if max < buf.len() {
+                if max == buf.len() {
+                    // all content was used, up, reuse buffer
+                    task.read_max = 0;
+                    buf.resize(0, 0);
+                } else {
                     let rest = buf.split_off(max);
+                    task.read_max = out.len() - rest.len();
                     mem::replace(buf, rest);
                 }
                 Poll::Ready(Ok(max))
             }
         } else {
-            let task = RecvBody::new(self.seq, self.reuse_conn, cx.waker().clone());
+            let mut task = RecvBody::new(self.seq, self.reuse_conn, cx.waker().clone());
+            task.read_max = out.len();
             inner.enqueue(task);
             Poll::Pending
         }
@@ -240,6 +247,7 @@ pub enum State {
     Closed,
 }
 
+#[derive(Debug)]
 struct Inner {
     next_seq: usize,
     cur_seq: usize,
@@ -263,14 +271,13 @@ impl Inner {
 
     fn enqueue<T: Into<Task>>(&mut self, task: T) {
         self.tasks.push(task.into());
+        self.try_wake_conn();
+    }
+
+    fn try_wake_conn(&mut self) {
         if let Some(waker) = self.conn_waker.take() {
             waker.wake();
         }
-    }
-
-    fn mark_error(&mut self, err: io::Error) {
-        self.state = State::Closed;
-        self.error = Some(err);
     }
 
     fn get_remote_error(&mut self) -> Option<Error> {
@@ -280,13 +287,25 @@ impl Inner {
         None
     }
 
-    fn assert_can_send_body(&self, seq: Seq) -> Option<Error> {
+    fn assert_can_send_body(&mut self, seq: Seq) -> Option<Error> {
         if self.cur_seq > *seq {
             return Some(Error::Static("Can't send body for old request"));
         }
-        if self.cur_seq == *seq && self.state != State::SendBody {
-            let message = format!("Can't send body in state: {:?}", self.state);
-            return Some(Error::Message(message));
+        if self.cur_seq == *seq {
+            match self.state {
+                State::Ready => {
+                    if self.tasks.get_send_req(seq).is_none() {
+                        panic!("Send body in state Waiting without a send_req");
+                    }
+                }
+                State::SendBody => {
+                    // we are expecting more body parts
+                }
+                _ => {
+                    let message = format!("Can't send body in state: {:?}", self.state);
+                    return Some(Error::Message(message));
+                }
+            }
         }
         None
     }
@@ -312,6 +331,7 @@ where
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let self_ = self.get_mut();
         let mut inner = self_.inner.lock().unwrap();
+        inner.conn_waker = Some(cx.waker().clone());
         loop {
             let cur_seq = Seq(inner.cur_seq);
             let mut state = inner.state; // copy to appease borrow checker
@@ -328,19 +348,25 @@ where
 
             if let Some(task) = inner.tasks.task_for_state(cur_seq, state) {
                 match ready!(task.poll_connection(cx, &mut self_.io, &mut state)) {
-                    Ok(v) => {
+                    Ok(_) => {
                         if inner.state != State::Ready && state == State::Ready {
                             inner.cur_seq += 1;
+                            trace!("New cur_seq: {}", inner.cur_seq);
                         }
-                        inner.state = state;
-                        v
+                        if inner.state != state {
+                            inner.state = state;
+                            trace!("State transitioned to: {:?}", state);
+                        }
                     }
                     Err(err) => {
-                        inner.mark_error(err);
+                        trace!("Connection error: {:?}", err);
+                        task.info_mut().complete = true;
+                        inner.error = Some(err);
+                        inner.state = State::Closed;
                     }
                 };
             } else {
-                inner.conn_waker = Some(cx.waker().clone());
+                trace!("Connection pending");
                 break Poll::Pending;
             }
 
@@ -484,9 +510,26 @@ impl ConnectionPoll for RecvBody {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        self.buf.resize(RECV_BODY_SIZE, 0);
-        let amount = ready!(Pin::new(&mut *io).poll_read(cx, &mut self.buf[..]))?;
-        self.buf.resize(amount, 0);
+        let cur_len = self.buf.len();
+        self.buf.resize(self.read_max, 0);
+        if cur_len == self.read_max {
+            self.waker.clone().wake();
+            return Poll::Pending;
+        }
+        let read = Pin::new(&mut *io).poll_read(cx, &mut self.buf[cur_len..]);
+        if let Poll::Pending = read {
+            self.buf.resize(cur_len, 0);
+        }
+        let amount = ready!(read)?;
+        self.buf.resize(cur_len + amount, 0);
+
+        let max = self.buf.len().min(30);
+        trace!(
+            "RecvBody amount: {} buf size: {} {:?}",
+            amount,
+            self.buf.len(),
+            String::from_utf8_lossy(&self.buf[0..max])
+        );
 
         if amount == 0 {
             mem::replace(&mut self.end, End(true));
@@ -498,7 +541,6 @@ impl ConnectionPoll for RecvBody {
         }
 
         self.waker.clone().wake();
-
         Poll::Ready(Ok(()))
     }
 }

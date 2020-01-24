@@ -98,7 +98,7 @@ mod test {
     use tls_api_rustls::TlsConnector as RustlsTlsConnector;
 
     #[test]
-    fn test_add_tls() -> Result<(), Error> {
+    fn test_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("https://www.google.com/")
             .body(Body::empty())
@@ -107,14 +107,14 @@ mod test {
             let conn = connect::<RustlsTlsConnector>(req.uri()).await?;
             let res = conn.send_request(req).await?;
             let (_, mut body) = res.into_parts();
-            body.as_string(1024 * 1024).await
+            body.as_string(5 * 1024 * 1024).await
         })?;
         println!("{}", body_s);
         Ok(())
     }
 
     #[test]
-    fn test_add_no_tls() -> Result<(), Error> {
+    fn test_no_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("http://www.google.com/")
             .body(Body::empty())
@@ -123,7 +123,7 @@ mod test {
             let conn = connect::<PassTlsConnector>(req.uri()).await?;
             let res = conn.send_request(req).await?;
             let (_, mut body) = res.into_parts();
-            body.as_string(1024 * 1024).await
+            body.as_string(5 * 1024 * 1024).await
         })?;
         println!("{}", body_s);
         Ok(())

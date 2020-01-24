@@ -7,13 +7,14 @@ use std::task::Waker;
 const HEADER_BUF_SIZE: usize = 1024;
 const RECV_BODY_SIZE: usize = 16_384;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Seq(pub usize);
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct End(pub bool);
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TaskId(pub usize);
 
+#[derive(Debug)]
 pub struct TaskInfo {
     pub seq: Seq,
     pub task_id: TaskId,
@@ -30,7 +31,8 @@ impl TaskInfo {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
+// #[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
 pub enum Task {
     SendReq(SendReq),
     SendBody(SendBody),
@@ -86,6 +88,7 @@ impl Task {
     }
 }
 
+#[derive(Debug)]
 pub struct SendReq {
     pub info: TaskInfo,
     pub req: Vec<u8>,
@@ -105,6 +108,7 @@ impl SendReq {
     }
 }
 
+#[derive(Debug)]
 pub struct SendBody {
     pub info: TaskInfo,
     pub body: Vec<u8>,
@@ -123,6 +127,7 @@ impl SendBody {
     }
 }
 
+#[derive(Debug)]
 pub struct RecvRes {
     pub info: TaskInfo,
     pub buf: Vec<u8>,
@@ -152,9 +157,11 @@ impl RecvRes {
     }
 }
 
+#[derive(Debug)]
 pub struct RecvBody {
     pub info: TaskInfo,
     pub buf: Vec<u8>,
+    pub read_max: usize,
     pub end: End,
     pub reuse_conn: bool,
     pub waker: Waker,
@@ -165,6 +172,7 @@ impl RecvBody {
         RecvBody {
             info: TaskInfo::new(seq),
             buf: Vec::with_capacity(RECV_BODY_SIZE),
+            read_max: 0,
             end: End(false),
             reuse_conn,
             waker,
@@ -172,6 +180,7 @@ impl RecvBody {
     }
 }
 
+#[derive(Debug)]
 pub struct Tasks {
     next_task_id: usize,
     list: Vec<Task>,
@@ -210,6 +219,13 @@ impl Tasks {
         self.list
             .iter_mut()
             .find(|t| t.info().seq == seq && (func)(t))
+    }
+
+    pub fn get_send_req(&mut self, seq: Seq) -> Option<&mut SendReq> {
+        match self.get_task(seq, Task::is_send_req) {
+            Some(Task::SendReq(t)) => Some(t),
+            _ => None,
+        }
     }
 
     pub fn get_send_body(&mut self, seq: Seq) -> Option<&mut SendBody> {

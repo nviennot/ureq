@@ -26,6 +26,7 @@ impl ChunkedDecoder {
         }
         if self.amount_left == 0 {
             let chunk_size = self.read_chunk_size(recv, buf).await?;
+            trace!("Chunk size: {}", chunk_size);
             if chunk_size == 0 {
                 self.is_finished = true;
                 return Ok(0);
@@ -58,7 +59,40 @@ impl ChunkedDecoder {
             if c == ';' || c == '\r' {
                 break;
             }
+            if c == '0'
+                || c == '1'
+                || c == '2'
+                || c == '3'
+                || c == '4'
+                || c == '5'
+                || c == '6'
+                || c == '7'
+                || c == '8'
+                || c == '9'
+                || c == 'a'
+                || c == 'b'
+                || c == 'c'
+                || c == 'd'
+                || c == 'e'
+                || c == 'f'
+            {
+                // good
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("Unexpected char in chunk size: {:?}", c),
+                )
+                .into());
+            }
             pos += 1;
+            if pos > 10 {
+                // something is wrong.
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Too many chars in number",
+                )
+                .into());
+            }
         }
 
         self.skip_until_lf(recv).await?;
