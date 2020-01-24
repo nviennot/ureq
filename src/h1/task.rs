@@ -10,8 +10,6 @@ const RECV_BODY_SIZE: usize = 16_384;
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct Seq(pub usize);
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct End(pub bool);
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TaskId(pub usize);
 
 #[derive(Debug)]
@@ -92,7 +90,7 @@ impl Task {
 pub struct SendReq {
     pub info: TaskInfo,
     pub req: Vec<u8>,
-    pub end: End,
+    pub end: bool,
 }
 
 impl SendReq {
@@ -103,7 +101,7 @@ impl SendReq {
         Ok(SendReq {
             info: TaskInfo::new(seq),
             req: req_buf,
-            end: End(end),
+            end,
         })
     }
 }
@@ -112,7 +110,7 @@ impl SendReq {
 pub struct SendBody {
     pub info: TaskInfo,
     pub body: Vec<u8>,
-    pub end: End,
+    pub end: bool,
     pub send_waker: Option<Waker>,
 }
 
@@ -121,7 +119,7 @@ impl SendBody {
         SendBody {
             info: TaskInfo::new(seq),
             body,
-            end: End(end),
+            end,
             send_waker: None,
         }
     }
@@ -165,7 +163,7 @@ pub struct RecvBody {
     pub info: TaskInfo,
     pub buf: Vec<u8>,
     pub read_max: usize,
-    pub end: End,
+    pub end: bool,
     pub reuse_conn: bool,
     pub waker: Waker,
 }
@@ -176,7 +174,7 @@ impl RecvBody {
             info: TaskInfo::new(seq),
             buf: Vec::with_capacity(RECV_BODY_SIZE),
             read_max: 0,
-            end: End(false),
+            end: false,
             reuse_conn,
             waker,
         }
@@ -255,13 +253,6 @@ impl Tasks {
 
 impl Deref for Seq {
     type Target = usize;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl Deref for End {
-    type Target = bool;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

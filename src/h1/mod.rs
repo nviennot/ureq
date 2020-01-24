@@ -15,7 +15,7 @@ use std::mem;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
-use task::{End, RecvBody, RecvRes, SendBody, SendReq, Seq, Task, Tasks};
+use task::{RecvBody, RecvRes, SendBody, SendReq, Seq, Task, Tasks};
 
 pub fn handshake<S>(io: S) -> (SendRequest, Connection<S>)
 where
@@ -87,7 +87,7 @@ impl Future for ResponseFuture {
                 task.info.complete = true;
                 Poll::Ready(Ok(http::Response::from_parts(parts, recv_stream)))
             } else {
-                mem::replace(&mut task.waker, cx.waker().clone());
+                task.waker = cx.waker().clone();
                 Poll::Pending
             }
         } else {
@@ -206,10 +206,10 @@ impl RecvReader {
     fn poll_read(&self, cx: &mut Context, out: &mut [u8]) -> Poll<Result<usize, Error>> {
         let mut inner = self.inner.lock().unwrap();
         if let Some(task) = inner.tasks.get_recv_body(self.seq) {
-            mem::replace(&mut task.waker, cx.waker().clone());
+            task.waker = cx.waker().clone();
             let buf = &mut task.buf;
             if buf.is_empty() {
-                if *task.end {
+                if task.end {
                     task.read_max = 0;
                     Poll::Ready(Ok(0))
                 } else {
@@ -225,9 +225,8 @@ impl RecvReader {
                     task.read_max = 0;
                     buf.resize(0, 0);
                 } else {
-                    let rest = buf.split_off(max);
-                    task.read_max = out.len() - rest.len();
-                    mem::replace(buf, rest);
+                    task.buf = buf.split_off(max);
+                    task.read_max = out.len() - task.buf.len();
                 }
                 Poll::Ready(Ok(max))
             }
@@ -411,13 +410,12 @@ impl ConnectionPoll for SendReq {
         loop {
             let amount = ready!(Pin::new(&mut *io).poll_write(cx, &self.req[..]))?;
             if amount < self.req.len() {
-                let rest = self.req.split_off(amount);
-                mem::replace(&mut self.req, rest);
+                self.req = self.req.split_off(amount);
                 continue;
             }
             break;
         }
-        if *self.end {
+        if self.end {
             *state = State::Waiting;
         } else {
             *state = State::SendBody;
@@ -442,8 +440,7 @@ impl ConnectionPoll for SendBody {
         loop {
             let amount = ready!(Pin::new(&mut *io).poll_write(cx, &self.body[..]))?;
             if amount < self.body.len() {
-                let rest = self.body.split_off(amount);
-                mem::replace(&mut self.body, rest);
+                self.body = self.body.split_off(amount);
                 continue;
             }
             break;
@@ -454,7 +451,7 @@ impl ConnectionPoll for SendBody {
             waker.wake();
         }
 
-        if *self.end {
+        if self.end {
             *state = State::Waiting;
             self.info.complete = true;
         }
@@ -543,7 +540,7 @@ impl ConnectionPoll for RecvBody {
         );
 
         if amount == 0 {
-            mem::replace(&mut self.end, End(true));
+            self.end = true;
             if self.reuse_conn {
                 *state = State::Ready;
             } else {
