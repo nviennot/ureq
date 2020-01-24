@@ -8,6 +8,7 @@ use bytes::Bytes;
 use h2::client::SendRequest as H2SendRequest;
 use std::fmt;
 
+#[derive(Clone)]
 pub enum ProtocolImpl {
     Http1(H1SendRequest),
     Http2(H2SendRequest<Bytes>),
@@ -22,6 +23,7 @@ impl fmt::Display for ProtocolImpl {
     }
 }
 
+#[derive(Clone)]
 pub struct Connection {
     p: ProtocolImpl,
 }
@@ -29,13 +31,6 @@ pub struct Connection {
 impl Connection {
     pub(crate) fn new(p: ProtocolImpl) -> Self {
         Connection { p }
-    }
-
-    pub fn maybe_clone(&self) -> Option<Connection> {
-        if let ProtocolImpl::Http2(send_req) = &self.p {
-            return Some(Connection::new(ProtocolImpl::Http2(send_req.clone())));
-        }
-        None
     }
 
     pub async fn send_request(
