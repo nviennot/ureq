@@ -194,7 +194,15 @@ impl AsyncRead for BodyReader {
         let read = match &mut this.imp {
             BodyImpl::RequestEmpty => 0,
             BodyImpl::RequestAsyncRead(reader) => ready!(Pin::new(reader).poll_read(cx, buf))?,
-            BodyImpl::RequestRead(reader) => reader.read(buf)?,
+            BodyImpl::RequestRead(reader) => match reader.read(buf) {
+                Ok(v) => v,
+                Err(e) => {
+                    if e.kind() == io::ErrorKind::WouldBlock {
+                        panic!("Body::from_sync_read() failed with ErrorKind::WouldBlock. Use Body::from_async_read()");
+                    }
+                    return Err(e).into();
+                }
+            },
             BodyImpl::Http1(recv, _) => ready!(recv.poll_read(cx, buf))?,
             BodyImpl::Http2(recv, _) => {
                 if let Some(data) = ready!(recv.poll_data(cx)) {
