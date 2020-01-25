@@ -7,18 +7,17 @@ use crate::Connection;
 use crate::Error;
 use bytes::Bytes;
 use futures_util::future::poll_fn;
+use futures_util::io::BufReader;
 use futures_util::ready;
 use h2::client::SendRequest as H2SendRequest;
 use h2::RecvStream as H2RecvStream;
 use std::io;
+use std::mem;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 #[cfg(feature = "gzip")]
 use async_compression::futures::bufread::{GzipDecoder, GzipEncoder};
-
-#[cfg(feature = "gzip")]
-use futures_util::io::BufReader;
 
 const BUF_SIZE: usize = 16_384;
 
@@ -30,23 +29,17 @@ pub struct Body {
 
 impl Body {
     pub fn empty() -> Self {
-        Self::new(BodyImpl::RequestEmpty, ContentEncoding::Deferred)
+        Self::new(BodyImpl::RequestEmpty)
     }
     pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
-        Self::new(
-            BodyImpl::RequestAsyncRead(Box::new(reader)),
-            ContentEncoding::Deferred,
-        )
+        Self::new(BodyImpl::RequestAsyncRead(Box::new(reader)))
     }
     pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
-        Self::new(
-            BodyImpl::RequestRead(Box::new(reader)),
-            ContentEncoding::Deferred,
-        )
+        Self::new(BodyImpl::RequestRead(Box::new(reader)))
     }
-    pub(crate) fn new(bimpl: BodyImpl, codec_kind: ContentEncoding) -> Self {
+    pub(crate) fn new(bimpl: BodyImpl) -> Self {
         let reader = BodyReader::new(bimpl);
-        let codec = BufReader::new(BodyCodec::new(codec_kind, reader));
+        let codec = BufReader::new(BodyCodec::deferred(reader));
         Body {
             codec,
             has_read: false,
@@ -54,20 +47,27 @@ impl Body {
         }
     }
 
-    pub(crate) fn resolve_deferred(&mut self, codec_kind: ContentEncoding) {
+    pub(crate) fn setup_codecs(&mut self, headers: &http::header::HeaderMap, is_decode: bool) {
+        if self.has_read {
+            panic!("setup_codecs after body started reading");
+        }
+
+        let mut new_codec = None;
         if let BodyCodec::Deferred(reader) = self.codec.get_mut() {
             if let Some(reader) = reader.take() {
-                let new_codec = BodyCodec::new(codec_kind, reader);
-                self.codec = BufReader::new(new_codec);
+                let encoding = content_encoding_from_headers(headers);
+                new_codec = Some(BodyCodec::from_encoding(reader, encoding, is_decode))
             }
         }
-    }
 
-    pub(crate) fn set_char_codec(&mut self, charset: &str, decode: bool) {
-        if self.has_read {
-            panic!("set_char_codec after body started reading");
+        if let Some(new_codec) = new_codec {
+            // to avoid creating another BufReader
+            mem::replace(self.codec.get_mut(), new_codec);
         }
-        self.char_codec = Some(CharCodec::new(charset, decode));
+
+        if let Some(charset) = charset_from_headers(headers) {
+            self.char_codec = Some(CharCodec::new(charset, is_decode));
+        }
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
@@ -79,36 +79,13 @@ impl Body {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContentEncoding {
-    Deferred,
-    Plain,
-    #[cfg(feature = "gzip")]
-    GzipDecode,
-    #[cfg(feature = "gzip")]
-    GzipEncode,
+fn content_encoding_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
+    headers
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
 }
 
-impl ContentEncoding {
-    pub fn from_headers(headers: &http::header::HeaderMap, is_decode: bool) -> ContentEncoding {
-        let cenc = headers
-            .get("content-encoding")
-            .and_then(|v| v.to_str().ok());
-        match (cenc, is_decode) {
-            (None, _) => ContentEncoding::Plain,
-            #[cfg(feature = "gzip")]
-            (Some("gzip"), true) => ContentEncoding::GzipDecode,
-            #[cfg(feature = "gzip")]
-            (Some("gzip"), false) => ContentEncoding::GzipEncode,
-            (Some(v), _) => {
-                error!("Unsupported content-encoding: {}", v);
-                ContentEncoding::Plain
-            }
-        }
-    }
-}
-
-pub fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
+fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
     headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
@@ -135,20 +112,26 @@ enum BodyCodec {
 }
 
 impl BodyCodec {
-    fn new(kind: ContentEncoding, reader: BodyReader) -> Self {
-        trace!("Body codec: {:?}", kind);
-        match kind {
-            ContentEncoding::Deferred => BodyCodec::Deferred(Some(reader)),
-            ContentEncoding::Plain => BodyCodec::Plain(reader),
-            #[cfg(feature = "gzip")]
-            ContentEncoding::GzipDecode => {
-                BodyCodec::GzipDecoder(GzipDecoder::new(BufReader::new(reader)))
+    fn deferred(reader: BodyReader) -> Self {
+        BodyCodec::Deferred(Some(reader))
+    }
+    fn from_encoding(reader: BodyReader, encoding: Option<&str>, is_decode: bool) -> Self {
+        trace!("Body codec: {:?}", encoding);
+        match (encoding, is_decode) {
+            (None, _) => BodyCodec::Plain(reader),
+            (Some("gzip"), true) => {
+                let buf = BufReader::new(reader);
+                BodyCodec::GzipDecoder(GzipDecoder::new(buf))
             }
-            #[cfg(feature = "gzip")]
-            ContentEncoding::GzipEncode => BodyCodec::GzipEncoder(GzipEncoder::new(
-                BufReader::new(reader),
-                flate2::Compression::fast(),
-            )),
+            (Some("gzip"), false) => {
+                let buf = BufReader::new(reader);
+                let comp = flate2::Compression::fast();
+                BodyCodec::GzipEncoder(GzipEncoder::new(buf, comp))
+            }
+            _ => {
+                warn!("Unknown content-encoding: {:?}", encoding);
+                BodyCodec::Plain(reader)
+            }
         }
     }
 

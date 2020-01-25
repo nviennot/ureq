@@ -1,4 +1,4 @@
-use crate::body::{charset_from_headers, Body, BodyImpl, ContentEncoding};
+use crate::body::{Body, BodyImpl};
 use crate::h1::SendRequest;
 use crate::Error;
 
@@ -34,13 +34,8 @@ pub async fn send_request_http1(
 
     let (parts, res_body) = fut_res.await?.into_parts();
 
-    let content_encoding = ContentEncoding::from_headers(&parts.headers, true);
-    let charset = charset_from_headers(&parts.headers);
-
-    let mut res_body = Body::new(BodyImpl::Http1(res_body, send_req_clone), content_encoding);
-    if let Some(charset) = charset {
-        res_body.set_char_codec(charset, true);
-    }
+    let mut res_body = Body::new(BodyImpl::Http1(res_body, send_req_clone));
+    res_body.setup_codecs(&parts.headers, true);
 
     let res = http::Response::from_parts(parts, res_body);
 
