@@ -1,4 +1,4 @@
-use crate::char_enc::CharCodec;
+use crate::charset::CharCodec;
 use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
 use crate::AsyncRead;
@@ -24,6 +24,7 @@ pub struct Body {
     codec: BufReader<BodyCodec>,
     has_read: bool,
     char_codec: Option<CharCodec>,
+    content_length: Option<usize>,
     is_finished: bool,
 }
 
@@ -44,6 +45,7 @@ impl Body {
             codec,
             has_read: false,
             char_codec: None,
+            content_length: None,
             is_finished: false,
         }
     }
@@ -65,9 +67,16 @@ impl Body {
             mem::replace(self.codec.get_mut(), new_codec);
         }
 
-        if let Some(charset) = charset_from_headers(headers) {
-            self.char_codec = Some(CharCodec::new(charset, is_response));
+        // TODO do we want charset conversion for request bodies?
+        if is_response {
+            // TODO sniff charset from html pages like
+            // <meta content="text/html; charset=UTF-8" http-equiv="Content-Type">
+            if let Some(charset) = charset_from_headers(headers) {
+                self.char_codec = Some(CharCodec::new(charset, is_response));
+            }
         }
+
+        self.content_length = content_length_from_headers(headers);
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
@@ -86,7 +95,10 @@ impl Body {
     }
 
     pub async fn read_to_vec(&mut self) -> Result<Vec<u8>, Error> {
-        let mut vec = Vec::new();
+        // use content length as capacity if we know it. given the content can be both
+        // gzipped and encoded with some charset, it might be wrong.
+        // TODO multiply this guess with good values for gzip (and charset?)
+        let mut vec = Vec::with_capacity(self.content_length.unwrap_or(8192));
         let mut idx = 0;
         loop {
             if idx == vec.len() {
@@ -343,14 +355,29 @@ fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
     headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
+        .and_then(|v| {
+            // only consider text content
+            if v.starts_with("text/") {
+                Some(v)
+            } else {
+                None
+            }
+        })
         .and_then(|x| {
             // text/html; charset=utf-8
             let s = x.split(';');
-            s.last().map(|l| l.trim())
+            s.last()
         })
         .and_then(|x| {
             // charset=utf-8
             let mut s = x.split('=');
             s.nth(1)
         })
+}
+
+fn content_length_from_headers(headers: &http::header::HeaderMap) -> Option<usize> {
+    headers
+        .get("content-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
 }

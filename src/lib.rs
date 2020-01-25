@@ -8,7 +8,7 @@ mod body;
 mod conn;
 mod conn_http1;
 // mod conn_http11;
-mod char_enc;
+mod charset;
 mod conn_http2;
 mod dlog;
 mod either;
