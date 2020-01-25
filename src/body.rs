@@ -9,6 +9,7 @@ use futures_util::io::BufReader;
 use futures_util::ready;
 use h2::client::SendRequest as H2SendRequest;
 use h2::RecvStream as H2RecvStream;
+use std::fs;
 use std::io;
 use std::mem;
 use std::pin::Pin;
@@ -259,6 +260,12 @@ impl From<Vec<u8>> for Body {
     fn from(bytes: Vec<u8>) -> Self {
         let cursor = io::Cursor::new(bytes);
         Body::from_sync_read(cursor)
+    }
+}
+
+impl From<fs::File> for Body {
+    fn from(file: fs::File) -> Self {
+        Body::from_sync_read(file)
     }
 }
 

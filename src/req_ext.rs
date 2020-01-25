@@ -15,6 +15,7 @@ where
     Self: Sized,
 {
     fn query(self, key: &str, value: &str) -> Self;
+    fn from_body<B: Into<Body>>(self, body: B) -> http::Result<Request<Body>>;
 }
 
 impl RequestBuilderExt for request::Builder {
@@ -24,6 +25,10 @@ impl RequestBuilderExt for request::Builder {
             ext.query_params.push((key.into(), value.into()));
         });
         self
+    }
+
+    fn from_body<B: Into<Body>>(self, body: B) -> http::Result<Request<Body>> {
+        self.body(body.into())
     }
 }
 

@@ -123,7 +123,7 @@ mod test {
         let req = http::Request::builder()
             .uri("http://www.google.com/")
             // .header("accept-encoding", "gzip")
-            .body(Body::empty())
+            .from_body(())
             .expect("Build");
         let body_s: Result<String, Error> = block_on(async {
             let conn = connect::<PassTlsConnector>(req.uri()).await?;
