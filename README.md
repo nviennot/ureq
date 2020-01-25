@@ -25,8 +25,8 @@ What are we doing?
   * [ ] Serialize JSON
 * Ergonomic body
   * [x] AsyncRead
-  * [ ] Read to Vec
-  * [ ] Read to String
+  * [x] Read to Vec
+  * [x] Read to String
   * [ ] Read to JSON
 * Body data transformations
   * [x] chunked encoding (my own)
