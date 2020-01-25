@@ -1,9 +1,7 @@
 use crate::char_enc::CharCodec;
-use crate::conn::ProtocolImpl;
 use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
 use crate::AsyncRead;
-use crate::Connection;
 use crate::Error;
 use bytes::Bytes;
 use futures_util::future::poll_fn;
@@ -46,7 +44,6 @@ impl Body {
             char_codec: None,
         }
     }
-
     pub(crate) fn setup_codecs(&mut self, headers: &http::header::HeaderMap, is_decode: bool) {
         if self.has_read {
             panic!("setup_codecs after body started reading");
@@ -74,8 +71,15 @@ impl Body {
         Ok(poll_fn(|cx| Pin::new(&mut *self).poll_read(cx, buf)).await?)
     }
 
-    pub async fn into_connection(self) -> Result<Connection, Error> {
-        self.codec.into_inner().into_inner().into_connection().await
+    pub async fn read_to_end(&mut self) -> Result<(), Error> {
+        let mut buf = vec![0_u8; BUF_SIZE];
+        loop {
+            let read = self.read(&mut buf).await?;
+            if read == 0 {
+                break;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -116,16 +120,16 @@ impl BodyCodec {
         }
     }
 
-    fn into_inner(self) -> BodyReader {
-        match self {
-            BodyCodec::Deferred(_) => panic!("into_inner() on BodyCodec::Deferred"),
-            BodyCodec::Plain(r) => r,
-            #[cfg(feature = "gzip")]
-            BodyCodec::GzipDecoder(r) => r.into_inner().into_inner(),
-            #[cfg(feature = "gzip")]
-            BodyCodec::GzipEncoder(r) => r.into_inner().into_inner(),
-        }
-    }
+    // fn reader_mut(&mut self) -> &mut BodyReader {
+    //     match self {
+    //         BodyCodec::Deferred(_) => panic!("into_inner() on BodyCodec::Deferred"),
+    //         BodyCodec::Plain(r) => r,
+    //         #[cfg(feature = "gzip")]
+    //         BodyCodec::GzipDecoder(r) => r.get_mut().get_mut(),
+    //         #[cfg(feature = "gzip")]
+    //         BodyCodec::GzipEncoder(r) => r.get_mut().get_mut(),
+    //     }
+    // }
 }
 
 pub struct BodyReader {
@@ -151,43 +155,12 @@ impl BodyReader {
         }
     }
 
-    async fn into_connection(mut self) -> Result<Connection, Error> {
-        // http11 reuses the same connection, and we can't leave the body
-        // half way through read.
-        if self.is_http11() && !self.is_finished {
-            self.read_to_end().await?;
-        }
-
-        let conn = match self.imp {
-            BodyImpl::Http1(_, h1) => Connection::new(ProtocolImpl::Http1(h1)),
-            BodyImpl::Http2(_, h2) => Connection::new(ProtocolImpl::Http2(h2)),
-            _ => return Err(Error::Static("Can't do into_connection() on request body")),
-        };
-
-        Ok(conn)
-    }
-
-    fn is_http11(&self) -> bool {
-        match &self.imp {
-            BodyImpl::Http1(_, _) => true,
-            _ => false,
-        }
-    }
-
-    async fn read_to_end(&mut self) -> Result<(), Error> {
-        let mut buf = vec![0_u8; BUF_SIZE];
-        loop {
-            let read = self.read(&mut buf).await?;
-            if read == 0 {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        Ok(poll_fn(|cx| Pin::new(&mut *self).poll_read(cx, buf)).await?)
-    }
+    // fn is_http11(&self) -> bool {
+    //     match &self.imp {
+    //         BodyImpl::Http1(_, _) => true,
+    //         _ => false,
+    //     }
+    // }
 
     // helper to shuffle Bytes into a &[u8] and handle the remains.
     fn bytes_to_buf(&mut self, mut data: Bytes, buf: &mut [u8]) -> usize {

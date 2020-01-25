@@ -46,6 +46,8 @@ What are we doing?
 * [ ] expect-100
 * [ ] Upstream PassTlsConnector
 * [ ] Cleanup Errors (implement Display proper)
+* [ ] Tests
+* [ ] Doc
 
 > Minimal request library in rust.
 
