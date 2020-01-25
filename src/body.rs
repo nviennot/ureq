@@ -79,28 +79,6 @@ impl Body {
     }
 }
 
-fn content_encoding_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
-    headers
-        .get("content-encoding")
-        .and_then(|v| v.to_str().ok())
-}
-
-fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
-    headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|x| {
-            // text/html; charset=utf-8
-            let s = x.split(';');
-            s.last().map(|l| l.trim())
-        })
-        .and_then(|x| {
-            // charset=utf-8
-            let mut s = x.split('=');
-            s.nth(1)
-        })
-}
-
 #[allow(clippy::large_enum_variant)]
 enum BodyCodec {
     Deferred(Option<BodyReader>),
@@ -115,14 +93,17 @@ impl BodyCodec {
     fn deferred(reader: BodyReader) -> Self {
         BodyCodec::Deferred(Some(reader))
     }
+
     fn from_encoding(reader: BodyReader, encoding: Option<&str>, is_decode: bool) -> Self {
         trace!("Body codec: {:?}", encoding);
         match (encoding, is_decode) {
             (None, _) => BodyCodec::Plain(reader),
+            #[cfg(feature = "gzip")]
             (Some("gzip"), true) => {
                 let buf = BufReader::new(reader);
                 BodyCodec::GzipDecoder(GzipDecoder::new(buf))
             }
+            #[cfg(feature = "gzip")]
             (Some("gzip"), false) => {
                 let buf = BufReader::new(reader);
                 let comp = flate2::Compression::fast();
@@ -332,4 +313,26 @@ impl AsyncRead for Body {
             Pin::new(&mut this.codec).poll_read(cx, buf)
         }
     }
+}
+
+fn content_encoding_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
+    headers
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+}
+
+fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|x| {
+            // text/html; charset=utf-8
+            let s = x.split(';');
+            s.last().map(|l| l.trim())
+        })
+        .and_then(|x| {
+            // charset=utf-8
+            let mut s = x.split('=');
+            s.nth(1)
+        })
 }
