@@ -3,22 +3,68 @@ use async_trait::async_trait;
 use http::request;
 use http::Uri;
 use http::{Request, Response};
+use once_cell::sync::Lazy;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+
 use qstring::QString;
 
 pub trait RequestBuilderExt
 where
     Self: Sized,
 {
-    fn query(self, key: &str, value: &str) -> http::Result<Self>;
+    fn query(self, key: &str, value: &str) -> Self;
 }
 
 impl RequestBuilderExt for request::Builder {
     //
-    fn query(self, key: &str, value: &str) -> http::Result<Self> {
-        // Parts is private in Builder. We have to body() to get it out.
-        let req = self.body(())?;
-        let (req_parts, _) = req.into_parts();
-        let mut uri_parts = req_parts.uri.into_parts();
+    fn query(mut self, key: &str, value: &str) -> Self {
+        with_ureq_ext(self.headers_mut(), |ext| {
+            ext.query_params.push((key.into(), value.into()));
+        });
+        self
+    }
+}
+
+#[async_trait]
+pub trait RequestExt {
+    /// Signature: `async fn send(self) -> Response<Body>`
+    async fn send(self) -> Response<Body>;
+
+    fn resolve_ureq_ext(self) -> Self;
+}
+
+#[async_trait]
+impl RequestExt for Request<Body> {
+    //
+    async fn send(self) -> Response<Body> {
+        //
+        unimplemented!()
+    }
+
+    fn resolve_ureq_ext(self) -> Self {
+        let (mut parts, body) = self.into_parts();
+        resolve_ureq_ext(&mut parts);
+        Request::from_parts(parts, body)
+    }
+}
+
+static UREQ_CNT: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
+static UREQ_EXT: Lazy<Mutex<HashMap<usize, UreqExt>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+struct UreqExt {
+    query_params: Vec<(String, String)>,
+}
+
+impl UreqExt {
+    fn new() -> Self {
+        UreqExt {
+            query_params: vec![],
+        }
+    }
+    fn invoke(self, parts: &mut http::request::Parts) {
+        let mut uri_parts = parts.uri.clone().into_parts();
 
         // Construct new instance of PathAndQuery with our modified query.
         let new_path_and_query = {
@@ -30,7 +76,9 @@ impl RequestBuilderExt for request::Builder {
                 .unwrap_or(("", ""));
 
             let mut qs = QString::from(query);
-            qs.add_pair((key, value));
+            for (key, value) in self.query_params.into_iter() {
+                qs.add_pair((key, value));
+            }
 
             // PathAndQuery has no API for modifying any fields. This seems to be our only
             // option to get a new instance of it using the public API.
@@ -43,37 +91,31 @@ impl RequestBuilderExt for request::Builder {
         uri_parts.path_and_query = Some(new_path_and_query);
         let new_uri = Uri::from_parts(uri_parts).unwrap();
 
-        // The result of this RequestBuilderExt is a Builder, but we don't have any
-        // RequestBuilder::from_parts(), which means we're forced to start over.
-        let mut builder = Request::builder()
-            .method(req_parts.method)
-            .uri(new_uri)
-            .version(req_parts.version);
-
-        // A Builder.headers() taking a complete HeaderMap would help here.
-        for (name, value) in req_parts.headers.iter() {
-            builder = builder.header(name, value);
-        }
-
-        // The Extensions type doesn't seem to be possible to query and/or move over
-        // to the new builder. This needs some solution.
-        // req_parts.extensions
-
-        Ok(builder)
+        parts.uri = new_uri;
     }
 }
 
-#[async_trait]
-pub trait RequestExt {
-    /// Signature: `async fn send(self) -> Response<Body>`
-    async fn send(self) -> Response<Body>;
+fn with_ureq_ext<F: FnOnce(&mut UreqExt)>(
+    headers: Option<&mut http::HeaderMap<http::HeaderValue>>,
+    f: F,
+) {
+    if let Some(headers) = headers {
+        let val = headers
+            .entry("x-ureq-ext")
+            .or_insert_with(|| UREQ_CNT.fetch_add(1, Ordering::Relaxed).into());
+        let id = val.to_str().unwrap().parse::<usize>().unwrap();
+        let mut lock = UREQ_EXT.lock().unwrap();
+        let ureq_ext = lock.entry(id).or_insert_with(UreqExt::new);
+        f(ureq_ext);
+    }
 }
 
-#[async_trait]
-impl RequestExt for Request<Body> {
-    //
-    async fn send(self) -> Response<Body> {
-        //
-        unimplemented!()
+pub fn resolve_ureq_ext(parts: &mut http::request::Parts) {
+    if let Some(val) = parts.headers.remove("x-ureq-ext") {
+        let id = val.to_str().unwrap().parse::<usize>().unwrap();
+        let mut lock = UREQ_EXT.lock().unwrap();
+        if let Some(ureq_ext) = lock.remove(&id) {
+            ureq_ext.invoke(parts);
+        }
     }
 }

@@ -102,6 +102,7 @@ mod test {
     fn test_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("https://lookback.io/")
+            .query("foo", "bar")
             .header("accept-encoding", "gzip")
             .body(Body::empty())
             .expect("Build");

@@ -1,9 +1,8 @@
 struct SimpleLogger;
 
 impl ::log::Log for SimpleLogger {
-    fn enabled(&self, _metadata: &::log::Metadata) -> bool {
-        true
-        // _metadata.target().starts_with("lolb")
+    fn enabled(&self, metadata: &::log::Metadata) -> bool {
+        metadata.target().starts_with("ureq")
     }
 
     fn log(&self, record: &::log::Record) {

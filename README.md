@@ -17,13 +17,13 @@ What are we doing?
 * [x] Talk http2 (h2)
 * [ ] Sniff default tokio runtime?
 * [ ] Set tokio Runtime
-* [ ] Explore http::Request extension mechanic
-* [ ] Ergonomic RequestExt
+* [x] Explore http::Request extension mechanic
+* Ergonomic RequestExt
   * [x] Query parameters
   * [ ] Username/password
   * [ ] authorization header
   * [ ] Serialize JSON
-* [ ] Ergonomic body
+* Ergonomic body
   * [x] AsyncRead
   * [ ] Read to Vec
   * [ ] Read to String

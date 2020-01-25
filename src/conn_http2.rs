@@ -51,7 +51,7 @@ pub async fn send_request_http2(
 
     let res = fut_res.await?;
 
-    trace!("Got h2 response: {:?}", res);
+    trace!("Got Http2 response: {:?}", res);
 
     let (parts, res_body) = res.into_parts();
 

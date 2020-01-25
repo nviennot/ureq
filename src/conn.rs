@@ -1,6 +1,7 @@
 use crate::conn_http1::send_request_http1;
 use crate::conn_http2::send_request_http2;
 use crate::h1::SendRequest as H1SendRequest;
+use crate::req_ext::RequestExt;
 use crate::Body;
 use crate::Error;
 use bytes::Bytes;
@@ -36,11 +37,16 @@ impl Connection {
         self,
         req: http::Request<Body>,
     ) -> Result<http::Response<Body>, Error> {
-        // resolve deferred body codecs now that we know the headers.
+        let req = req.resolve_ureq_ext();
+        //
         let (parts, mut body) = req.into_parts();
+
+        // resolve deferred body codecs now that we know the headers.
         body.setup_codecs(&parts.headers, false);
 
         let req = http::Request::from_parts(parts, body);
+
+        trace!("{} {} {}", self.p, req.method(), req.uri());
 
         match self.p {
             ProtocolImpl::Http2(send_req) => send_request_http2(send_req, req).await,
