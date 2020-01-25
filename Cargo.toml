@@ -7,11 +7,12 @@ edition = "2018"
 [features]
 default = [
     "tokio",
-    "gzip",
+    "gzip"
 ]
 async-std = [
     "async-std-lib",
     "tokio-min",
+    "gzip"
 ]
 tokio = [
     "tokio-exe",

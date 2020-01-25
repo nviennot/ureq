@@ -7,7 +7,6 @@ use crate::Error;
 use crate::{AsyncBufRead, AsyncRead};
 use bytes::Bytes;
 use futures_util::future::poll_fn;
-use futures_util::io::BufReader;
 use futures_util::ready;
 use h2::client::SendRequest as H2SendRequest;
 use h2::RecvStream as H2RecvStream;
@@ -17,6 +16,9 @@ use std::task::{Context, Poll};
 
 #[cfg(feature = "gzip")]
 use async_compression::futures::bufread::{GzipDecoder, GzipEncoder};
+
+#[cfg(feature = "gzip")]
+use futures_util::io::BufReader;
 
 const BUF_SIZE: usize = 16_384;
 
@@ -96,6 +98,7 @@ impl ContentEncoding {
             (None, _) => ContentEncoding::Plain,
             #[cfg(feature = "gzip")]
             (Some("gzip"), true) => ContentEncoding::GzipDecode,
+            #[cfg(feature = "gzip")]
             (Some("gzip"), false) => ContentEncoding::GzipEncode,
             (Some(v), _) => {
                 error!("Unsupported content-encoding: {}", v);
