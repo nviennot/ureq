@@ -5,11 +5,7 @@ use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-#[cfg(not(feature = "tokio"))]
-use tokio_min::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite};
-
-#[cfg(feature = "tokio")]
-use tokio_exe::io::{AsyncRead as TokioAsyncRead, AsyncWrite as TokioAsyncWrite};
+use tokio_traits::{TokioAsyncRead, TokioAsyncWrite};
 
 pub fn from_tokio<Z>(adapted: Z) -> impl Stream
 where

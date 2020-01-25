@@ -32,14 +32,14 @@ pub mod exec {
     }
 }
 
-#[cfg(feature = "tokio")]
+#[cfg(all(feature = "tokio", not(feature = "async-std")))]
 pub mod exec {
     use super::*;
     use crate::tokio::from_tokio;
     use once_cell::sync::OnceCell;
     use std::sync::Mutex;
-    use tokio_exe::net::TcpStream;
-    use tokio_exe::runtime::{Builder, Handle, Runtime};
+    use tokio_lib::net::TcpStream;
+    use tokio_lib::runtime::{Builder, Handle, Runtime};
 
     static RUNTIME: OnceCell<Mutex<Runtime>> = OnceCell::new();
     static HANDLE: OnceCell<Handle> = OnceCell::new();
@@ -77,7 +77,7 @@ pub mod exec {
         (handle, runtime)
     }
 
-    fn with_runtime<F: FnOnce(&mut tokio_exe::runtime::Runtime) -> R, R>(f: F) -> R {
+    fn with_runtime<F: FnOnce(&mut tokio_lib::runtime::Runtime) -> R, R>(f: F) -> R {
         let mut rt = RUNTIME
             .get_or_init(|| {
                 let (h, rt) = create_default_runtime();
@@ -89,7 +89,7 @@ pub mod exec {
         f(&mut rt)
     }
 
-    fn with_handle<F: FnOnce(tokio_exe::runtime::Handle)>(f: F) {
+    fn with_handle<F: FnOnce(tokio_lib::runtime::Handle)>(f: F) {
         let h = {
             HANDLE
                 .get_or_init(|| {

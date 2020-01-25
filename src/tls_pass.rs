@@ -7,11 +7,7 @@ use std::task::{Context, Poll};
 use tls_api::Result;
 use tls_api::TlsStream;
 
-#[cfg(feature = "tokio")]
-use tokio_exe::io::{AsyncRead, AsyncWrite};
-
-#[cfg(feature = "async-std")]
-use tokio_min::io::{AsyncRead, AsyncWrite};
+use tokio_traits::{TokioAsyncRead, TokioAsyncWrite};
 
 pub struct TlsConnectorBuilder(PassThrough);
 pub struct TlsConnector(PassThrough);
@@ -79,14 +75,14 @@ impl tls_api::TlsConnector for TlsConnector {
         _stream: S,
     ) -> Pin<Box<dyn Future<Output = tls_api::Result<TlsStream<S>>> + Send + 'a>>
     where
-        S: AsyncRead + AsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
+        S: TokioAsyncRead + TokioAsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
     {
         Box::pin(async { Ok(TlsStream::new(TlsStreamImpl(Box::new(_stream)))) })
     }
 }
 
 // pub trait TlsStreamImpl<S>:
-//     AsyncRead + AsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static
+//     TokioAsyncRead + TokioAsyncWrite + Unpin + fmt::Debug + Send + Sync + 'static
 // {
 //     /// Get negotiated ALPN protocol.
 //     fn get_alpn_protocol(&self) -> Option<Vec<u8>>;
@@ -97,11 +93,11 @@ impl tls_api::TlsConnector for TlsConnector {
 #[derive(Debug)]
 struct TlsStreamImpl<S>(Box<S>)
 where
-    S: AsyncRead + AsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static;
+    S: TokioAsyncRead + TokioAsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static;
 
 impl<S> tls_api::TlsStreamImpl<S> for TlsStreamImpl<S>
 where
-    S: AsyncRead + AsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
+    S: TokioAsyncRead + TokioAsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
 {
     fn get_alpn_protocol(&self) -> Option<Vec<u8>> {
         None
@@ -144,15 +140,15 @@ impl tls_api::TlsAcceptor for TlsAcceptor {
         _stream: S,
     ) -> Pin<Box<dyn Future<Output = Result<TlsStream<S>>> + Send + 'a>>
     where
-        S: AsyncRead + AsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
+        S: TokioAsyncRead + TokioAsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
     {
         Box::pin(async { Err(tls_api::Error::new(Error)) })
     }
 }
 
-impl<S> AsyncRead for TlsStreamImpl<S>
+impl<S> TokioAsyncRead for TlsStreamImpl<S>
 where
-    S: AsyncRead + AsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
+    S: TokioAsyncRead + TokioAsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
 {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -163,9 +159,9 @@ where
     }
 }
 
-impl<S> AsyncWrite for TlsStreamImpl<S>
+impl<S> TokioAsyncWrite for TlsStreamImpl<S>
 where
-    S: AsyncRead + AsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
+    S: TokioAsyncRead + TokioAsyncWrite + fmt::Debug + Unpin + Send + Sync + 'static,
 {
     fn poll_write(
         self: Pin<&mut Self>,
