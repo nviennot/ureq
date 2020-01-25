@@ -42,7 +42,7 @@ impl Connection {
         let (parts, mut body) = req.into_parts();
 
         // resolve deferred body codecs now that we know the headers.
-        body.setup_codecs(&parts.headers, false);
+        body.configure(&parts.headers, false);
 
         let req = http::Request::from_parts(parts, body);
 

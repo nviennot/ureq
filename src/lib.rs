@@ -95,7 +95,6 @@ pub fn block_on<Ret, Fut: Future<Output = Ret>>(f: Fut) -> Ret {
 #[cfg(test)]
 mod test {
     use super::*;
-    use futures_util::io::AsyncReadExt;
     use tls_api_rustls::TlsConnector as RustlsTlsConnector;
 
     #[test]
@@ -110,9 +109,7 @@ mod test {
             let conn = connect::<RustlsTlsConnector>(req.uri()).await?;
             let res = conn.send_request(req).await?;
             let (_, mut body) = res.into_parts();
-            let mut buffer = String::with_capacity(4);
-            body.read_to_string(&mut buffer).await?;
-            Ok(buffer)
+            body.read_to_string().await
         });
         println!("{}", body_s?);
         Ok(())
@@ -129,9 +126,7 @@ mod test {
             let conn = connect::<PassTlsConnector>(req.uri()).await?;
             let res = conn.send_request(req).await?;
             let (_, mut body) = res.into_parts();
-            let mut buffer = String::with_capacity(4);
-            body.read_to_string(&mut buffer).await?;
-            Ok(buffer)
+            body.read_to_string().await
         });
         println!("{}", body_s?);
         Ok(())

@@ -24,6 +24,7 @@ pub struct Body {
     codec: BufReader<BodyCodec>,
     has_read: bool,
     char_codec: Option<CharCodec>,
+    is_finished: bool,
 }
 
 impl Body {
@@ -43,9 +44,10 @@ impl Body {
             codec,
             has_read: false,
             char_codec: None,
+            is_finished: false,
         }
     }
-    pub(crate) fn setup_codecs(&mut self, headers: &http::header::HeaderMap, is_decode: bool) {
+    pub(crate) fn configure(&mut self, headers: &http::header::HeaderMap, is_response: bool) {
         if self.has_read {
             panic!("setup_codecs after body started reading");
         }
@@ -54,7 +56,7 @@ impl Body {
         if let BodyCodec::Deferred(reader) = self.codec.get_mut() {
             if let Some(reader) = reader.take() {
                 let encoding = content_encoding_from_headers(headers);
-                new_codec = Some(BodyCodec::from_encoding(reader, encoding, is_decode))
+                new_codec = Some(BodyCodec::from_encoding(reader, encoding, is_response))
             }
         }
 
@@ -64,7 +66,7 @@ impl Body {
         }
 
         if let Some(charset) = charset_from_headers(headers) {
-            self.char_codec = Some(CharCodec::new(charset, is_decode));
+            self.char_codec = Some(CharCodec::new(charset, is_response));
         }
     }
 
@@ -81,6 +83,28 @@ impl Body {
             }
         }
         Ok(())
+    }
+
+    pub async fn read_to_vec(&mut self) -> Result<Vec<u8>, Error> {
+        let mut vec = Vec::new();
+        let mut idx = 0;
+        loop {
+            if idx == vec.len() {
+                vec.resize(idx + 8192, 0);
+            }
+            let amount = self.read(&mut vec[idx..]).await?;
+            if amount == 0 {
+                vec.resize(idx, 0);
+                break;
+            }
+            idx += amount;
+        }
+        Ok(vec)
+    }
+
+    pub async fn read_to_string(&mut self) -> Result<String, Error> {
+        let vec = self.read_to_vec().await?;
+        Ok(String::from_utf8(vec)?)
     }
 }
 
@@ -294,12 +318,18 @@ impl AsyncRead for Body {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let this = self.get_mut();
-        this.has_read = true;
-        if let Some(char_codec) = &mut this.char_codec {
+        if !this.has_read {
+            this.has_read = true;
+        }
+        let amount = ready!(if let Some(char_codec) = &mut this.char_codec {
             char_codec.poll_decode(cx, &mut this.codec, buf)
         } else {
             Pin::new(&mut this.codec).poll_read(cx, buf)
+        })?;
+        if amount == 0 {
+            this.is_finished = true;
         }
+        Ok(amount).into()
     }
 }
 

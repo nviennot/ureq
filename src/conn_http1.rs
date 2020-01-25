@@ -35,7 +35,7 @@ pub async fn send_request_http1(
     let (parts, res_body) = fut_res.await?.into_parts();
 
     let mut res_body = Body::new(BodyImpl::Http1(res_body, send_req_clone));
-    res_body.setup_codecs(&parts.headers, true);
+    res_body.configure(&parts.headers, true);
 
     let res = http::Response::from_parts(parts, res_body);
 
