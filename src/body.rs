@@ -70,6 +70,10 @@ impl Body {
         self.length
     }
 
+    pub(crate) fn is_definitely_no_body(&self) -> bool {
+        self.length.map(|l| l == 0).unwrap_or(false)
+    }
+
     pub(crate) fn configure(
         &mut self,
         deadline: Deadline,

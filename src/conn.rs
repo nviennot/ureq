@@ -3,6 +3,7 @@ use crate::conn_http2::send_request_http2;
 use crate::h1::SendRequest as H1SendRequest;
 use crate::req_ext::resolve_ureq_ext;
 use crate::req_ext::RequestParams;
+use crate::uri_ext::MethodExt;
 use crate::Body;
 use crate::Error;
 use bytes::Bytes;
@@ -97,21 +98,18 @@ impl Connection {
             ext.deadline()
         };
 
+        // if user set a length, we don't try to do any inferring
         let user_set_length = parts.headers.get("content-length").is_some();
-        let method_indicates_body = parts.method == http::Method::POST
-            || parts.method == http::Method::PUT
-            || parts.method == http::Method::PATCH;
         if !user_set_length {
-            // if user set a length, that's the end of it.
             if let Some(len) = body.length() {
                 // the body indicates a length (for sure).
                 // we don't want to set content-length: 0 unless we know it's
                 // a method that really has a body.
-                if len > 0 || method_indicates_body {
-                    let s = len.to_string();
-                    parts.headers.insert("content-length", s.parse().unwrap());
+                if len > 0 || parts.method.indicates_body() {
+                    let len_h = len.to_string().parse().unwrap();
+                    parts.headers.insert("content-length", len_h);
                 }
-            } else if !self.is_http2() && method_indicates_body {
+            } else if !self.is_http2() && parts.method.indicates_body() {
                 // body does not indicate a length (like from a reader),
                 // and method indicates there really is one.
                 // we chose chunked.

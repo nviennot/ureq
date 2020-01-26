@@ -4,6 +4,19 @@ use std::fmt;
 const DEFAULT_PORT_HTTP: &str = "80";
 const DEFAULT_PORT_HTTPS: &str = "443";
 
+pub trait MethodExt {
+    fn indicates_body(&self) -> bool;
+}
+
+impl MethodExt for http::Method {
+    fn indicates_body(&self) -> bool {
+        match *self {
+            http::Method::POST | http::Method::PUT | http::Method::PATCH => true,
+            _ => false,
+        }
+    }
+}
+
 pub trait UriExt {
     fn host_port(&self) -> Result<HostPort<'_>, Error>;
     fn parse_relative(&self, from: &str) -> Result<http::Uri, Error>;
