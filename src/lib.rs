@@ -90,8 +90,16 @@ pub async fn open_stream(stream: impl Stream, proto: Protocol) -> Result<Connect
     }
 }
 
-pub fn block_on<Ret, Fut: Future<Output = Ret>>(f: Fut) -> Ret {
-    AsyncImpl::block_on(f)
+pub trait BlockExt {
+    fn block(self) -> Self::Output
+    where
+        Self: Future;
+}
+
+impl<F: Future> BlockExt for F {
+    fn block(self) -> F::Output {
+        AsyncImpl::block_on(self)
+    }
 }
 
 #[cfg(test)]
@@ -108,12 +116,10 @@ mod test {
             .header("accept-encoding", "gzip")
             .body(Body::empty())
             .expect("Build");
-        let body_s: Result<String, Error> = block_on(async {
-            let conn = connect::<RustlsTlsConnector>(req.uri()).await?;
-            let mut res = conn.send_request(req).await?;
-            Ok(res.body_mut().read_to_string().await?)
-        });
-        println!("{}", body_s?);
+        let conn = connect::<RustlsTlsConnector>(req.uri()).block()?;
+        let mut res = conn.send_request(req).block()?;
+        let body_s = res.body_mut().read_to_string().block()?;
+        println!("{}", body_s);
         Ok(())
     }
 
@@ -125,12 +131,10 @@ mod test {
             .timeout(Duration::from_millis(1000))
             .from_body(())
             .expect("Build");
-        let body_s: Result<String, Error> = block_on(async {
-            let conn = connect::<PassTlsConnector>(req.uri()).await?;
-            let mut res = conn.send_request(req).await?;
-            Ok(res.body_mut().read_to_string().await?)
-        });
-        println!("{}", body_s?);
+        let conn = connect::<PassTlsConnector>(req.uri()).block()?;
+        let mut res = conn.send_request(req).block()?;
+        let body_s = res.body_mut().read_to_string().block()?;
+        println!("{}", body_s);
         Ok(())
     }
 }
