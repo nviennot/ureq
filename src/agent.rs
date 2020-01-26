@@ -37,7 +37,7 @@ impl<Tls: TlsConnector> Agent<Tls> {
         Ok(self.connections.get_mut(idx).unwrap())
     }
 
-    pub async fn run(&mut self, req: http::Request<Body>) -> Result<http::Response<Body>, Error> {
+    pub async fn send(&mut self, req: http::Request<Body>) -> Result<http::Response<Body>, Error> {
         let conn = match self.reuse_from_pool(req.uri())? {
             Some(conn) => conn,
             None => self.connect(req.uri()).await?,

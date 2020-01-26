@@ -8,7 +8,8 @@ edition = "2018"
 default = [
     "tokio",
     "gzip",
-    "rustls"
+    "rustls",
+    # "tlsapi"
 ]
 async-std = [
     "async-std-lib",
@@ -23,6 +24,7 @@ gzip = [
 rustls = [
     "tls-api-rustls"
 ]
+tlsapi = []
 
 [dependencies]
 bytes = "*"

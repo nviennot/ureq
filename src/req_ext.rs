@@ -15,6 +15,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "tlsapi")]
+use tls_api::TlsConnector;
+
 #[async_trait]
 pub trait RequestBuilderExt
 where
@@ -24,8 +27,13 @@ where
     fn timeout(self, duration: Duration) -> Self;
     fn with_body<B: Into<Body>>(self, body: B) -> http::Result<Request<Body>>;
 
-    #[cfg(feature = "rustls")]
     async fn send<B: Into<Body> + Send>(self, body: B) -> Result<Response<Body>, Error>;
+
+    #[cfg(feature = "tlsapi")]
+    async fn send_tls<B, Tls>(self, body: B) -> Result<Response<Body>, Error>
+    where
+        B: Into<Body> + Send,
+        Tls: TlsConnector;
 }
 
 #[async_trait]
@@ -49,10 +57,19 @@ impl RequestBuilderExt for request::Builder {
         self.body(body.into())
     }
 
-    #[cfg(feature = "rustls")]
     async fn send<B: Into<Body> + Send>(self, body: B) -> Result<Response<Body>, Error> {
         let req = self.with_body(body)?;
         Ok(req.send().await?)
+    }
+
+    #[cfg(feature = "tlsapi")]
+    async fn send_tls<B, Tls>(self, body: B) -> Result<Response<Body>, Error>
+    where
+        B: Into<Body> + Send,
+        Tls: TlsConnector,
+    {
+        let req = self.with_body(body)?;
+        Ok(req.send_tls::<Tls>().await?)
     }
 }
 
@@ -65,8 +82,10 @@ pub trait RequestExt {
 
     fn header_as<T: FromStr>(&self, key: &str) -> Option<T>;
 
-    #[cfg(feature = "rustls")]
     async fn send(self) -> Result<Response<Body>, Error>;
+
+    #[cfg(feature = "tlsapi")]
+    async fn send_tls<Tls: TlsConnector>(self) -> Result<Response<Body>, Error>;
 }
 
 #[async_trait]
@@ -80,12 +99,24 @@ impl<B: Into<Body> + Send> RequestExt for Request<B> {
         self.headers().get_as(key)
     }
 
-    #[cfg(feature = "rustls")]
     async fn send(self) -> Result<Response<Body>, Error> {
+        //
+        #[cfg(feature = "rustls")]
         let mut agent = Agent::<tls_api_rustls::TlsConnector>::new();
+        #[cfg(not(feature = "rustls"))]
+        let mut agent = Agent::<crate::tls_pass::TlsConnector>::new();
+
         let (parts, body) = self.into_parts();
         let req = Request::from_parts(parts, body.into());
-        agent.run(req).await
+        agent.send(req).await
+    }
+
+    #[cfg(feature = "tlsapi")]
+    async fn send_tls<Tls: TlsConnector>(self) -> Result<Response<Body>, Error> {
+        let mut agent = Agent::<Tls>::new();
+        let (parts, body) = self.into_parts();
+        let req = Request::from_parts(parts, body.into());
+        agent.send(req).await
     }
 }
 
