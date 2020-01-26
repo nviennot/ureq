@@ -2,7 +2,9 @@
 
 ![](https://github.com/algesten/ureq/workflows/CI/badge.svg)
 
-# FUTURE DIRECTION BRANCH. NOT USEFUL
+# FUTURE DIRECTION BRANCH. NOT USEFUL YET
+
+[Thoughts here](THOUGHTS.md)
 
 What are we doing?
 
@@ -11,7 +13,7 @@ What are we doing?
 * [x] Request/response body
 * [x] Resolve DNS (dns-lookup)
 * [x] Timeout for entire request.
-*   [ ] Propagate timeout to socket itself
+  * [ ] Propagate timeout to socket itself
 * [x] Connect socket … or is this API surface?
 * [x] Wrap socket in SSL (tls-api)
 * [x] Talk http1 (write own h1, httparse)
@@ -52,28 +54,16 @@ What are we doing?
 
 > Minimal request library in rust.
 
-## Usage
-
-TODO
-
-## Features
-
-TODO
-
 ## Motivation
 
-  * Minimal dependency tree
   * Obvious API
   * Convencience over correctness
+  * Minimal dependency tree
 
 This library tries to provide a convenient request library with a minimal dependency
 tree and an obvious API. It is inspired by libraries like
 [superagent](http://visionmedia.github.io/superagent/) and
 [fetch API](https://developer.mozilla.org/en-US/docs/Web/API/Fetch_API).
-
-This library does not try to enforce web standards correctness. It uses HTTP/1.1,
-but whether the request is _perfect_ HTTP/1.1 compatible is up to the user of the
-library. For example:
 
 ## License
 
