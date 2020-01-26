@@ -159,31 +159,33 @@ impl BuilderStore {
         let mut uri_parts = parts.uri.clone().into_parts();
 
         // Construct new instance of PathAndQuery with our modified query.
-        let new_path_and_query = {
-            //
-            let (path, query) = uri_parts
-                .path_and_query
-                .as_ref()
-                .map(|p| (p.path(), p.query().unwrap_or("")))
-                .unwrap_or(("", ""));
+        if !self.query_params.is_empty() {
+            let new_path_and_query = {
+                //
+                let (path, query) = uri_parts
+                    .path_and_query
+                    .as_ref()
+                    .map(|p| (p.path(), p.query().unwrap_or("")))
+                    .unwrap_or(("", ""));
 
-            let mut qs = QString::from(query);
-            for (key, value) in self.query_params.into_iter() {
-                qs.add_pair((key, value));
-            }
+                let mut qs = QString::from(query);
+                for (key, value) in self.query_params.into_iter() {
+                    qs.add_pair((key, value));
+                }
 
-            // PathAndQuery has no API for modifying any fields. This seems to be our only
-            // option to get a new instance of it using the public API.
-            let tmp: Uri = format!("http://fake{}?{}", path, qs).parse().unwrap();
-            let tmp_parts = tmp.into_parts();
-            tmp_parts.path_and_query.unwrap()
-        };
+                // PathAndQuery has no API for modifying any fields. This seems to be our only
+                // option to get a new instance of it using the public API.
+                let tmp: Uri = format!("http://fake{}?{}", path, qs).parse().unwrap();
+                let tmp_parts = tmp.into_parts();
+                tmp_parts.path_and_query.unwrap()
+            };
 
-        // This is good. We can change the PathAndQuery field.
-        uri_parts.path_and_query = Some(new_path_and_query);
-        let new_uri = Uri::from_parts(uri_parts).unwrap();
+            // This is good. We can change the PathAndQuery field.
+            uri_parts.path_and_query = Some(new_path_and_query);
 
-        parts.uri = new_uri;
+            let new_uri = Uri::from_parts(uri_parts).unwrap();
+            parts.uri = new_uri;
+        }
 
         self.req_params
     }

@@ -47,12 +47,14 @@ What are we doing?
   * [ ] Max connections in pool
   * [ ] Max connections per host
 * [ ] Cookie state in connection (cookie)
-* [ ] Follow redirects
+* [x] Follow redirects
 * [ ] expect-100
 * [ ] HTTP Proxy
 * [ ] Upstream PassTlsConnector
 * [ ] Investigate why TlsApi wants a Sync stream.
 * [ ] Cleanup Errors (implement Display proper)
+* [ ] Don't send a body in HEAD/OPTIONS etc.
+* [ ] Set is_finished early if not content in response
 * [ ] Tests
 * [ ] Doc
 

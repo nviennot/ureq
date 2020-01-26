@@ -6,11 +6,28 @@ const DEFAULT_PORT_HTTPS: &str = "443";
 
 pub trait UriExt {
     fn host_port(&self) -> Result<HostPort<'_>, Error>;
+    fn parse_relative(&self, from: &str) -> Result<http::Uri, Error>;
 }
 
 impl UriExt for http::Uri {
     fn host_port(&self) -> Result<HostPort<'_>, Error> {
         HostPort::from_uri(self)
+    }
+    fn parse_relative(&self, from: &str) -> Result<http::Uri, Error> {
+        let uri_res: Result<http::Uri, http::Error> =
+            from.parse::<http::Uri>().map_err(|e| e.into());
+        let uri = uri_res?;
+        match (uri.scheme(), uri.authority()) {
+            (Some(_), Some(_)) => Ok(uri),
+            (None, None) => {
+                // it's relative to the original url
+                let mut parts = uri.into_parts();
+                parts.scheme = self.scheme().cloned();
+                parts.authority = self.authority().cloned();
+                Ok(http::Uri::from_parts(parts).unwrap())
+            }
+            _ => Err(Error::Message(format!("Unknown redirection: {}", uri))),
+        }
     }
 }
 

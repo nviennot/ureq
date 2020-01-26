@@ -21,7 +21,7 @@ mod res_ext;
 mod tls;
 mod tls_pass;
 mod tokio;
-mod uri;
+mod uri_ext;
 
 pub(crate) use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
 
@@ -44,7 +44,7 @@ use crate::either::Either;
 use crate::proto::Protocol;
 use crate::tls::wrap_tls;
 use crate::tokio::to_tokio;
-use crate::uri::UriExt;
+use crate::uri_ext::UriExt;
 use std::future::Future;
 use tls_api::TlsConnector;
 
@@ -123,13 +123,12 @@ mod test {
     #[test]
     fn test_tls() -> Result<(), Error> {
         let mut res = http::Request::builder()
-            .uri("https://lookback.io/")
+            .uri("https://lookback.io")
             .query("foo", "bar")
             .header("accept-encoding", "gzip")
+            .timeout(Duration::from_millis(1000))
             .send(())
             .block()?;
-        // let conn = connect::<RustlsTlsConnector>(req.uri()).block()?;
-        // let mut res = conn.send_request(req).block()?;
         let body_s = res.body_mut().read_to_string().block()?;
         println!("{}", body_s);
         Ok(())
@@ -138,7 +137,7 @@ mod test {
     #[test]
     fn test_no_tls() -> Result<(), Error> {
         let mut res = http::Request::builder()
-            .uri("http://www.google.com/")
+            .uri("http://www.google.com")
             .header("accept-encoding", "gzip")
             .timeout(Duration::from_millis(1000))
             .send(())
