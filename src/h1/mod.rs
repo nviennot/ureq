@@ -13,7 +13,7 @@ use std::future::Future;
 use std::io;
 use std::mem;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};
 use task::{RecvBody, RecvRes, SendBody, SendReq, Seq, Task, Tasks};
 
@@ -22,7 +22,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let inner = Arc::new(Mutex::new(Inner::new()));
-    let conn = Connection::new(io, inner.clone());
+    let conn = Connection::new(io, &inner);
     let send_req = SendRequest::new(inner);
     (send_req, conn)
 }
@@ -327,12 +327,15 @@ impl Inner {
 
 pub struct Connection<S> {
     io: S,
-    inner: Arc<Mutex<Inner>>,
+    inner: Weak<Mutex<Inner>>,
 }
 
 impl<S> Connection<S> {
-    fn new(io: S, inner: Arc<Mutex<Inner>>) -> Self {
-        Connection { io, inner }
+    fn new(io: S, inner: &Arc<Mutex<Inner>>) -> Self {
+        Connection {
+            io,
+            inner: Arc::downgrade(inner),
+        }
     }
 }
 
@@ -343,9 +346,20 @@ where
     type Output = io::Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let self_ = self.get_mut();
-        let mut inner = self_.inner.lock().unwrap();
+        let this = self.get_mut();
+
+        let arc_opt = this.inner.upgrade();
+        if arc_opt.is_none() {
+            // all handles to operate on this connection are gone.
+            // TODO preserve connection errors that are gone with Inner being dropped.
+            return Ok(()).into();
+        }
+        let arc_mutex = arc_opt.unwrap();
+
+        let mut inner = arc_mutex.lock().unwrap();
+
         inner.conn_waker = Some(cx.waker().clone());
+
         loop {
             let cur_seq = Seq(inner.cur_seq);
             let mut state = inner.state; // copy to appease borrow checker
@@ -364,7 +378,7 @@ where
             inner.tasks.prune_completed();
 
             if let Some(task) = inner.tasks.task_for_state(cur_seq, state) {
-                match ready!(task.poll_connection(cx, &mut self_.io, &mut state)) {
+                match ready!(task.poll_connection(cx, &mut this.io, &mut state)) {
                     Ok(_) => {
                         if inner.state != State::Ready && state == State::Ready {
                             inner.cur_seq += 1;
