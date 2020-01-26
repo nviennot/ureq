@@ -48,7 +48,7 @@ What are we doing?
   * [ ] Max connections per host
 * [ ] Cookie state in connection (cookie)
 * [x] Follow redirects
-* [ ] expect-100
+* [ ] expect-100?
 * [ ] HTTP Proxy
 * [ ] Upstream PassTlsConnector
 * [ ] Investigate why TlsApi wants a Sync stream.

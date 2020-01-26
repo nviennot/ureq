@@ -5,12 +5,18 @@ pub trait ResponseExt {
     /// Get a header, ignore incorrect header values.
     fn header(&self, key: &str) -> Option<&str>;
 
+    fn status_code(&self) -> u16;
+
     fn header_as<T: FromStr>(&self, key: &str) -> Option<T>;
 }
 
 impl<B> ResponseExt for Response<B> {
     fn header(&self, key: &str) -> Option<&str> {
         self.headers().get_str(key)
+    }
+
+    fn status_code(&self) -> u16 {
+        self.status().as_u16()
     }
 
     fn header_as<T: FromStr>(&self, key: &str) -> Option<T> {

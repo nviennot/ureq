@@ -74,6 +74,7 @@ impl<Tls: TlsConnector> Agent<Tls> {
             match conn.send_request(req).await {
                 Ok(res) => {
                     // follow redirections
+                    let code = res.status_code();
                     if res.status().is_redirection() {
                         redirects -= 1;
 
@@ -89,6 +90,12 @@ impl<Tls: TlsConnector> Agent<Tls> {
                         let (mut parts, body) = next_req.into_parts();
                         parts.uri = parts.uri.parse_relative(location)?;
                         next_req = http::Request::from_parts(parts, body);
+
+                        if code > 303 {
+                            // TODO fix 307 and 308 using Expect-100 mechanic.
+                            warn!("Unhandled redirection status: {} {}", code, location);
+                            break Ok(res);
+                        }
 
                         continue;
                     }
