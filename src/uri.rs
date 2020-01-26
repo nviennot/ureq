@@ -4,6 +4,16 @@ use std::fmt;
 const DEFAULT_PORT_HTTP: &str = "80";
 const DEFAULT_PORT_HTTPS: &str = "443";
 
+pub trait UriExt {
+    fn host_port(&self) -> Result<HostPort<'_>, Error>;
+}
+
+impl UriExt for http::Uri {
+    fn host_port(&self) -> Result<HostPort<'_>, Error> {
+        HostPort::from_uri(self)
+    }
+}
+
 pub enum HostPort<'a> {
     HasPort {
         host: &'a str,
@@ -52,7 +62,6 @@ impl<'a> HostPort<'a> {
         Ok(hostport)
     }
 
-    #[allow(unused)]
     pub fn host(&self) -> &str {
         match self {
             HostPort::HasPort { host, .. } => host,

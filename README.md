@@ -48,6 +48,7 @@ What are we doing?
 * [ ] Follow redirects
 * [ ] expect-100
 * [ ] Upstream PassTlsConnector
+* [ ] Investigate why TlsApi wants a Sync stream.
 * [ ] Cleanup Errors (implement Display proper)
 * [ ] Tests
 * [ ] Doc

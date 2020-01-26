@@ -5,16 +5,17 @@ use crate::Error;
 use bytes::Bytes;
 use futures_util::future::poll_fn;
 use h2::client::SendRequest;
+use std::sync::Arc;
 
 const BUF_SIZE: usize = 16_384;
 
 pub async fn send_request_http2(
     send_req: SendRequest<Bytes>,
     req: http::Request<Body>,
+    unfinished_recs: Arc<()>,
 ) -> Result<http::Response<Body>, Error> {
     //
     let params = *req.extensions().get::<RequestParams>().unwrap();
-    let send_req_clone = send_req.clone();
 
     let mut h2 = send_req.ready().await?;
 
@@ -59,7 +60,7 @@ pub async fn send_request_http2(
     let (mut parts, res_body) = res.into_parts();
     parts.extensions.insert(params);
 
-    let mut res_body = Body::new(BodyImpl::Http2(res_body, send_req_clone));
+    let mut res_body = Body::new(BodyImpl::Http2(res_body), Some(unfinished_recs));
     res_body.configure(params.deadline(), &parts.headers, true);
 
     let res = http::Response::from_parts(parts, res_body);

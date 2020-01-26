@@ -1,6 +1,8 @@
 use crate::deadline::Deadline;
 use crate::res_ext::HeaderMapExt;
+use crate::Agent;
 use crate::Body;
+use crate::Error;
 use async_trait::async_trait;
 use http::request;
 use http::Uri;
@@ -13,15 +15,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+#[async_trait]
 pub trait RequestBuilderExt
 where
     Self: Sized,
 {
     fn query(self, key: &str, value: &str) -> Self;
     fn timeout(self, duration: Duration) -> Self;
-    fn from_body<B: Into<Body>>(self, body: B) -> http::Result<Request<Body>>;
+    fn with_body<B: Into<Body>>(self, body: B) -> http::Result<Request<Body>>;
+
+    #[cfg(feature = "rustls")]
+    async fn send<B: Into<Body> + Send>(self, body: B) -> Result<Response<Body>, Error>;
 }
 
+#[async_trait]
 impl RequestBuilderExt for request::Builder {
     //
     fn query(mut self, key: &str, value: &str) -> Self {
@@ -38,8 +45,14 @@ impl RequestBuilderExt for request::Builder {
         self
     }
 
-    fn from_body<B: Into<Body>>(self, body: B) -> http::Result<Request<Body>> {
+    fn with_body<B: Into<Body>>(self, body: B) -> http::Result<Request<Body>> {
         self.body(body.into())
+    }
+
+    #[cfg(feature = "rustls")]
+    async fn send<B: Into<Body> + Send>(self, body: B) -> Result<Response<Body>, Error> {
+        let req = self.with_body(body)?;
+        Ok(req.send().await?)
     }
 }
 
@@ -52,8 +65,8 @@ pub trait RequestExt {
 
     fn header_as<T: FromStr>(&self, key: &str) -> Option<T>;
 
-    /// Signature: `async fn send(self) -> Response<Body>`
-    async fn send(self) -> Response<Body>;
+    #[cfg(feature = "rustls")]
+    async fn send(self) -> Result<Response<Body>, Error>;
 }
 
 #[async_trait]
@@ -67,9 +80,12 @@ impl<B: Into<Body> + Send> RequestExt for Request<B> {
         self.headers().get_as(key)
     }
 
-    async fn send(self) -> Response<Body> {
-        //
-        unimplemented!()
+    #[cfg(feature = "rustls")]
+    async fn send(self) -> Result<Response<Body>, Error> {
+        let mut agent = Agent::<tls_api_rustls::TlsConnector>::new();
+        let (parts, body) = self.into_parts();
+        let req = Request::from_parts(parts, body.into());
+        agent.run(req).await
     }
 }
 

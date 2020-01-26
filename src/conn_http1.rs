@@ -3,16 +3,17 @@ use crate::h1::SendRequest;
 use crate::req_ext::RequestParams;
 use crate::Body;
 use crate::Error;
+use std::sync::Arc;
 
 const BUF_SIZE: usize = 16_384;
 
 pub async fn send_request_http1(
     send_req: SendRequest,
     req: http::Request<Body>,
+    unfinished_recs: Arc<()>,
 ) -> Result<http::Response<Body>, Error> {
     //
     let params = *req.extensions().get::<RequestParams>().unwrap();
-    let send_req_clone = send_req.clone();
 
     let mut h1 = send_req; // .ready().await?;
 
@@ -38,7 +39,7 @@ pub async fn send_request_http1(
     let (mut parts, res_body) = fut_res.await?.into_parts();
     parts.extensions.insert(params);
 
-    let mut res_body = Body::new(BodyImpl::Http1(res_body, send_req_clone));
+    let mut res_body = Body::new(BodyImpl::Http1(res_body), Some(unfinished_recs));
     res_body.configure(params.deadline(), &parts.headers, true);
 
     let res = http::Response::from_parts(parts, res_body);

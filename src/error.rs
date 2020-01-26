@@ -12,6 +12,7 @@ pub enum Error {
     TlsError(tls_api::Error),
     H1(h1::Error),
     H2(h2::Error),
+    Http(http::Error),
     FromUtf8(FromUtf8Error),
 }
 
@@ -55,6 +56,12 @@ impl From<h1::Error> for Error {
 impl From<h2::Error> for Error {
     fn from(e: h2::Error) -> Self {
         Error::H2(e)
+    }
+}
+
+impl From<http::Error> for Error {
+    fn from(e: http::Error) -> Self {
+        Error::Http(e)
     }
 }
 

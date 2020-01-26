@@ -1,7 +1,6 @@
 use crate::charset::CharCodec;
 use crate::deadline::Deadline;
 use crate::h1::RecvStream as H1RecvStream;
-use crate::h1::SendRequest as H1SendRequest;
 use crate::res_ext::HeaderMapExt;
 use crate::AsyncRead;
 use crate::Error;
@@ -9,12 +8,12 @@ use bytes::Bytes;
 use futures_util::future::poll_fn;
 use futures_util::io::BufReader;
 use futures_util::ready;
-use h2::client::SendRequest as H2SendRequest;
 use h2::RecvStream as H2RecvStream;
 use std::fs;
 use std::io;
 use std::mem;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 #[cfg(feature = "gzip")]
@@ -27,23 +26,23 @@ pub struct Body {
     has_read: bool,
     char_codec: Option<CharCodec>,
     content_length: Option<usize>,
-    is_finished: bool,
     deadline: Deadline,
+    unfinished_recs: Option<Arc<()>>,
 }
 
 impl Body {
     pub fn empty() -> Self {
-        Self::new(BodyImpl::RequestEmpty)
+        Self::new(BodyImpl::RequestEmpty, None)
     }
     pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
         let boxed = Box::new(reader);
-        Self::new(BodyImpl::RequestAsyncRead(boxed))
+        Self::new(BodyImpl::RequestAsyncRead(boxed), None)
     }
     pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
         let boxed = Box::new(reader);
-        Self::new(BodyImpl::RequestRead(boxed))
+        Self::new(BodyImpl::RequestRead(boxed), None)
     }
-    pub(crate) fn new(bimpl: BodyImpl) -> Self {
+    pub(crate) fn new(bimpl: BodyImpl, unfinished_recs: Option<Arc<()>>) -> Self {
         let reader = BodyReader::new(bimpl);
         let codec = BufReader::new(BodyCodec::deferred(reader));
         Body {
@@ -51,8 +50,8 @@ impl Body {
             has_read: false,
             char_codec: None,
             content_length: None,
-            is_finished: false,
             deadline: Deadline::inert(),
+            unfinished_recs,
         }
     }
     pub(crate) fn configure(
@@ -192,8 +191,8 @@ pub enum BodyImpl {
     RequestEmpty,
     RequestAsyncRead(Box<dyn AsyncRead + Unpin + Send>),
     RequestRead(Box<dyn io::Read + Send>),
-    Http1(H1RecvStream, H1SendRequest),
-    Http2(H2RecvStream, H2SendRequest<Bytes>),
+    Http1(H1RecvStream),
+    Http2(H2RecvStream),
 }
 
 impl BodyReader {
@@ -253,8 +252,8 @@ impl AsyncRead for BodyReader {
                     return Err(e).into();
                 }
             },
-            BodyImpl::Http1(recv, _) => ready!(recv.poll_read(cx, buf))?,
-            BodyImpl::Http2(recv, _) => {
+            BodyImpl::Http1(recv) => ready!(recv.poll_read(cx, buf))?,
+            BodyImpl::Http2(recv) => {
                 if let Some(data) = ready!(recv.poll_data(cx)) {
                     let data = data.map_err(|e| {
                         e.into_io().unwrap_or_else(|| {
@@ -337,7 +336,8 @@ impl AsyncRead for Body {
             Pin::new(&mut this.codec).poll_read(cx, buf)
         })?;
         if amount == 0 {
-            this.is_finished = true;
+            // by removing this arc, we reduce the unfinished recs count.
+            this.unfinished_recs.take();
         }
         Ok(amount).into()
     }

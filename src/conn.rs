@@ -8,6 +8,7 @@ use crate::Error;
 use bytes::Bytes;
 use h2::client::SendRequest as H2SendRequest;
 use std::fmt;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[derive(Clone)]
@@ -25,21 +26,44 @@ impl fmt::Display for ProtocolImpl {
     }
 }
 
-#[derive(Clone)]
+// #[derive(Clone)]
 pub struct Connection {
+    addr: String,
     p: ProtocolImpl,
+    unfinished_reqs: Arc<()>,
 }
 
 impl Connection {
-    pub(crate) fn new(p: ProtocolImpl) -> Self {
-        Connection { p }
+    pub(crate) fn new(addr: String, p: ProtocolImpl) -> Self {
+        Connection {
+            addr,
+            p,
+            unfinished_reqs: Arc::new(()),
+        }
+    }
+
+    pub(crate) fn addr(&self) -> &str {
+        &self.addr
+    }
+
+    pub(crate) fn is_http2(&self) -> bool {
+        match self.p {
+            ProtocolImpl::Http1(_) => false,
+            ProtocolImpl::Http2(_) => true,
+        }
+    }
+
+    pub(crate) fn unfinished_requests(&self) -> usize {
+        Arc::strong_count(&self.unfinished_reqs) - 1 // -1 for self
     }
 
     pub async fn send_request(
-        self,
+        &mut self,
         req: http::Request<Body>,
     ) -> Result<http::Response<Body>, Error> {
-        //
+        // up the arc-counter on unfinished reqs
+        let unfin = self.unfinished_reqs.clone();
+
         let (mut parts, mut body) = req.into_parts();
 
         // apply ureq request builder extensions.
@@ -61,11 +85,19 @@ impl Connection {
 
         let req = http::Request::from_parts(parts, body);
 
-        trace!("{} {} {}", self.p, req.method(), req.uri());
+        trace!("{} {} {} {}", self.p, self.addr, req.method(), req.uri());
 
-        match self.p {
-            ProtocolImpl::Http1(send_req) => deadline.race(send_request_http1(send_req, req)).await,
-            ProtocolImpl::Http2(send_req) => deadline.race(send_request_http2(send_req, req)).await,
+        match &mut self.p {
+            ProtocolImpl::Http1(send_req) => {
+                deadline
+                    .race(send_request_http1(send_req.clone(), req, unfin))
+                    .await
+            }
+            ProtocolImpl::Http2(send_req) => {
+                deadline
+                    .race(send_request_http2(send_req.clone(), req, unfin))
+                    .await
+            }
         }
     }
 }
