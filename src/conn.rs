@@ -49,22 +49,23 @@ impl Connection {
             parts.extensions.insert(RequestParams::new());
         }
 
-        {
+        let deadline = {
             // set req_start to be able to measure connection time
             let ext = parts.extensions.get_mut::<RequestParams>().unwrap();
             ext.req_start = Some(Instant::now());
-        }
+            ext.deadline()
+        };
 
         // resolve deferred body codecs now that we know the headers.
-        body.configure(&parts.headers, false);
+        body.configure(deadline, &parts.headers, false);
 
         let req = http::Request::from_parts(parts, body);
 
         trace!("{} {} {}", self.p, req.method(), req.uri());
 
         match self.p {
-            ProtocolImpl::Http1(send_req) => send_request_http1(send_req, req).await,
-            ProtocolImpl::Http2(send_req) => send_request_http2(send_req, req).await,
+            ProtocolImpl::Http1(send_req) => deadline.race(send_request_http1(send_req, req)).await,
+            ProtocolImpl::Http2(send_req) => deadline.race(send_request_http2(send_req, req)).await,
         }
     }
 }

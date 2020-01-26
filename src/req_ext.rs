@@ -1,3 +1,4 @@
+use crate::deadline::Deadline;
 use crate::Body;
 use async_trait::async_trait;
 use http::request;
@@ -64,7 +65,7 @@ struct BuilderStore {
     req_params: RequestParams,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RequestParams {
     pub req_start: Option<Instant>,
     pub timeout: Option<Duration>,
@@ -75,6 +76,10 @@ impl RequestParams {
         RequestParams {
             ..Default::default()
         }
+    }
+
+    pub fn deadline(&self) -> Deadline {
+        Deadline::new(self.req_start, self.timeout)
     }
 }
 

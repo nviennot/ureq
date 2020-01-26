@@ -10,7 +10,8 @@ What are we doing?
 * [x] Set request headers (http)
 * [x] Request/response body
 * [x] Resolve DNS (dns-lookup)
-* [ ] Timeout for entire request.
+* [x] Timeout for entire request.
+*   [ ] Propagate timeout to socket itself
 * [x] Connect socket … or is this API surface?
 * [x] Wrap socket in SSL (tls-api)
 * [x] Talk http1 (write own h1, httparse)

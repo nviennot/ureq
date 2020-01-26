@@ -5,11 +5,11 @@ extern crate log;
 
 mod async_impl;
 mod body;
+mod charset;
 mod conn;
 mod conn_http1;
-// mod conn_http11;
-mod charset;
 mod conn_http2;
+mod deadline;
 mod dlog;
 mod either;
 mod error;
@@ -95,6 +95,7 @@ pub fn block_on<Ret, Fut: Future<Output = Ret>>(f: Fut) -> Ret {
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::time::Duration;
     use tls_api_rustls::TlsConnector as RustlsTlsConnector;
 
     #[test]
@@ -119,7 +120,8 @@ mod test {
     fn test_no_tls() -> Result<(), Error> {
         let req = http::Request::builder()
             .uri("http://www.google.com/")
-            // .header("accept-encoding", "gzip")
+            .header("accept-encoding", "gzip")
+            .timeout(Duration::from_millis(1000))
             .from_body(())
             .expect("Build");
         let body_s: Result<String, Error> = block_on(async {

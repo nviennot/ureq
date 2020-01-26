@@ -1,4 +1,5 @@
 use crate::charset::CharCodec;
+use crate::deadline::Deadline;
 use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
 use crate::AsyncRead;
@@ -26,6 +27,7 @@ pub struct Body {
     char_codec: Option<CharCodec>,
     content_length: Option<usize>,
     is_finished: bool,
+    deadline: Deadline,
 }
 
 impl Body {
@@ -33,10 +35,12 @@ impl Body {
         Self::new(BodyImpl::RequestEmpty)
     }
     pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
-        Self::new(BodyImpl::RequestAsyncRead(Box::new(reader)))
+        let boxed = Box::new(reader);
+        Self::new(BodyImpl::RequestAsyncRead(boxed))
     }
     pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
-        Self::new(BodyImpl::RequestRead(Box::new(reader)))
+        let boxed = Box::new(reader);
+        Self::new(BodyImpl::RequestRead(boxed))
     }
     pub(crate) fn new(bimpl: BodyImpl) -> Self {
         let reader = BodyReader::new(bimpl);
@@ -47,12 +51,20 @@ impl Body {
             char_codec: None,
             content_length: None,
             is_finished: false,
+            deadline: Deadline::inert(),
         }
     }
-    pub(crate) fn configure(&mut self, headers: &http::header::HeaderMap, is_response: bool) {
+    pub(crate) fn configure(
+        &mut self,
+        deadline: Deadline,
+        headers: &http::header::HeaderMap,
+        is_response: bool,
+    ) {
         if self.has_read {
-            panic!("setup_codecs after body started reading");
+            panic!("configure after body started reading");
         }
+
+        self.deadline = deadline;
 
         let mut new_codec = None;
         if let BodyCodec::Deferred(reader) = self.codec.get_mut() {
@@ -305,6 +317,31 @@ impl From<fs::File> for Body {
     }
 }
 
+impl AsyncRead for Body {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if !this.has_read {
+            this.has_read = true;
+        }
+        if let Some(err) = this.deadline.check_time_left() {
+            return Poll::Ready(Err(err));
+        }
+        let amount = ready!(if let Some(char_codec) = &mut this.char_codec {
+            char_codec.poll_decode(cx, &mut this.codec, buf)
+        } else {
+            Pin::new(&mut this.codec).poll_read(cx, buf)
+        })?;
+        if amount == 0 {
+            this.is_finished = true;
+        }
+        Ok(amount).into()
+    }
+}
+
 impl AsyncRead for BodyCodec {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -320,28 +357,6 @@ impl AsyncRead for BodyCodec {
             #[cfg(feature = "gzip")]
             BodyCodec::GzipEncoder(r) => Pin::new(r).poll_read(cx, buf),
         }
-    }
-}
-
-impl AsyncRead for Body {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context,
-        buf: &mut [u8],
-    ) -> Poll<io::Result<usize>> {
-        let this = self.get_mut();
-        if !this.has_read {
-            this.has_read = true;
-        }
-        let amount = ready!(if let Some(char_codec) = &mut this.char_codec {
-            char_codec.poll_decode(cx, &mut this.codec, buf)
-        } else {
-            Pin::new(&mut this.codec).poll_read(cx, buf)
-        })?;
-        if amount == 0 {
-            this.is_finished = true;
-        }
-        Ok(amount).into()
     }
 }
 
