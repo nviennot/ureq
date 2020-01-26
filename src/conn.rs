@@ -7,9 +7,13 @@ use crate::Body;
 use crate::Error;
 use bytes::Bytes;
 use h2::client::SendRequest as H2SendRequest;
+use once_cell::sync::Lazy;
 use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+
+static ID_COUNTER: Lazy<AtomicUsize> = Lazy::new(|| AtomicUsize::new(0));
 
 #[derive(Clone)]
 pub enum ProtocolImpl {
@@ -28,18 +32,31 @@ impl fmt::Display for ProtocolImpl {
 
 // #[derive(Clone)]
 pub struct Connection {
+    id: usize,
     addr: String,
     p: ProtocolImpl,
     unfinished_reqs: Arc<()>,
 }
 
+impl PartialEq for Connection {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl Eq for Connection {}
+
 impl Connection {
     pub(crate) fn new(addr: String, p: ProtocolImpl) -> Self {
         Connection {
+            id: ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             addr,
             p,
             unfinished_reqs: Arc::new(()),
         }
+    }
+
+    pub(crate) fn id(&self) -> usize {
+        self.id
     }
 
     pub(crate) fn addr(&self) -> &str {
@@ -89,14 +106,12 @@ impl Connection {
 
         match &mut self.p {
             ProtocolImpl::Http1(send_req) => {
-                deadline
-                    .race(send_request_http1(send_req.clone(), req, unfin))
-                    .await
+                let s = send_req.clone();
+                deadline.race(send_request_http1(s, req, unfin)).await
             }
             ProtocolImpl::Http2(send_req) => {
-                deadline
-                    .race(send_request_http2(send_req.clone(), req, unfin))
-                    .await
+                let s = send_req.clone();
+                deadline.race(send_request_http2(s, req, unfin)).await
             }
         }
     }

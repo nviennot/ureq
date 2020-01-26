@@ -32,10 +32,9 @@ pub use crate::error::Error;
 pub use crate::req_ext::{RequestBuilderExt, RequestExt};
 pub use crate::res_ext::ResponseExt;
 pub use http;
-pub use tls_pass::TlsConnector as PassTlsConnector;
 
-mod prelude {
-    pub use crate::{Agent, BlockExt, Body, RequestBuilderExt, RequestExt, ResponseExt};
+pub mod prelude {
+    pub use crate::{BlockExt, RequestBuilderExt, RequestExt, ResponseExt};
     pub use http::{Request, Response};
 }
 

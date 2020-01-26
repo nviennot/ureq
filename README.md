@@ -42,11 +42,14 @@ What are we doing?
   * [ ] character sets
   * [x] gzip
 * [ ] Retry logic
-* [ ] Connection pooling
+* [x] Connection pooling
+  * [ ] Connection pool timeout
+  * [ ] Max connections in pool
+  * [ ] Max connections per host
 * [ ] Cookie state in connection (cookie)
-* [ ] HTTP Proxy
 * [ ] Follow redirects
 * [ ] expect-100
+* [ ] HTTP Proxy
 * [ ] Upstream PassTlsConnector
 * [ ] Investigate why TlsApi wants a Sync stream.
 * [ ] Cleanup Errors (implement Display proper)

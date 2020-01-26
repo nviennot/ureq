@@ -42,6 +42,14 @@ impl<Tls: TlsConnector> Agent<Tls> {
             Some(conn) => conn,
             None => self.connect(req.uri()).await?,
         };
-        conn.send_request(req).await
+
+        let result = conn.send_request(req).await;
+
+        if result.is_err() {
+            let conn_id = conn.id();
+            self.connections.retain(|c| c.id() != conn_id);
+        }
+
+        result
     }
 }
