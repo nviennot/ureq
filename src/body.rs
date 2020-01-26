@@ -2,6 +2,7 @@ use crate::charset::CharCodec;
 use crate::deadline::Deadline;
 use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
+use crate::req_ext::HeaderMapExt;
 use crate::AsyncRead;
 use crate::Error;
 use bytes::Bytes;
@@ -69,7 +70,7 @@ impl Body {
         let mut new_codec = None;
         if let BodyCodec::Deferred(reader) = self.codec.get_mut() {
             if let Some(reader) = reader.take() {
-                let encoding = content_encoding_from_headers(headers);
+                let encoding = headers.get_str("content-encoding");
                 new_codec = Some(BodyCodec::from_encoding(reader, encoding, is_response))
             }
         }
@@ -88,7 +89,7 @@ impl Body {
             }
         }
 
-        self.content_length = content_length_from_headers(headers);
+        self.content_length = headers.get_as("content-length");
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
@@ -360,16 +361,9 @@ impl AsyncRead for BodyCodec {
     }
 }
 
-fn content_encoding_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
-    headers
-        .get("content-encoding")
-        .and_then(|v| v.to_str().ok())
-}
-
 fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
     headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
+        .get_str("content-type")
         .and_then(|v| {
             // only consider text content
             if v.starts_with("text/") {
@@ -388,11 +382,4 @@ fn charset_from_headers(headers: &http::header::HeaderMap) -> Option<&str> {
             let mut s = x.split('=');
             s.nth(1)
         })
-}
-
-fn content_length_from_headers(headers: &http::header::HeaderMap) -> Option<usize> {
-    headers
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<usize>().ok())
 }

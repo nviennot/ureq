@@ -1,6 +1,8 @@
 use super::chunked::{ChunkedDecoder, ChunkedEncoder};
 use super::Error;
 use super::RecvReader;
+use crate::RequestExt;
+use crate::ResponseExt;
 use futures_util::ready;
 use std::io;
 use std::task::{Context, Poll};
@@ -19,10 +21,7 @@ impl LimitRead {
             .map(|h| h == "chunked")
             .unwrap_or(false);
 
-        let content_length = res
-            .headers()
-            .get("content-length")
-            .and_then(|h| h.to_str().ok().and_then(|c| c.parse::<u64>().ok()));
+        let content_length = res.header_as::<u64>("content-length");
 
         let use_chunked = transfer_enc_chunk || content_length.is_none();
 
@@ -121,10 +120,7 @@ impl LimitWrite {
             .map(|h| h == "chunked")
             .unwrap_or(false);
 
-        let content_length = req
-            .headers()
-            .get("content-length")
-            .and_then(|h| h.to_str().ok().and_then(|c| c.parse::<u64>().ok()));
+        let content_length = req.header_as::<u64>("content-length");
 
         if let Some(content_length) = content_length {
             if transfer_enc_chunk {

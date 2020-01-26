@@ -31,7 +31,7 @@ pub use crate::conn::Connection;
 use crate::conn::ProtocolImpl;
 use crate::either::Either;
 use crate::proto::Protocol;
-pub use crate::req_ext::{RequestBuilderExt, RequestExt};
+pub use crate::req_ext::{RequestBuilderExt, RequestExt, ResponseExt};
 use crate::tls::wrap_tls;
 use crate::tokio::to_tokio;
 use std::future::Future;
