@@ -23,6 +23,7 @@ const BUF_SIZE: usize = 16_384;
 
 pub struct Body {
     codec: BufReader<BodyCodec>,
+    length: Option<u64>,
     has_read: bool,
     char_codec: Option<CharCodec>,
     content_length: Option<usize>,
@@ -32,28 +33,43 @@ pub struct Body {
 
 impl Body {
     pub fn empty() -> Self {
-        Self::new(BodyImpl::RequestEmpty, None)
+        Self::new(BodyImpl::RequestEmpty, Some(0), None)
     }
-    pub fn from_async_read<R: AsyncRead + Unpin + Send + 'static>(reader: R) -> Self {
+
+    pub fn from_async_read<R>(reader: R, length: Option<u64>) -> Self
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
         let boxed = Box::new(reader);
-        Self::new(BodyImpl::RequestAsyncRead(boxed), None)
+        Self::new(BodyImpl::RequestAsyncRead(boxed), length, None)
     }
-    pub fn from_sync_read<R: io::Read + Send + 'static>(reader: R) -> Self {
+
+    pub fn from_sync_read<R>(reader: R, length: Option<u64>) -> Self
+    where
+        R: io::Read + Send + 'static,
+    {
         let boxed = Box::new(reader);
-        Self::new(BodyImpl::RequestRead(boxed), None)
+        Self::new(BodyImpl::RequestRead(boxed), length, None)
     }
-    pub(crate) fn new(bimpl: BodyImpl, unfinished_recs: Option<Arc<()>>) -> Self {
+
+    pub(crate) fn new(bimpl: BodyImpl, length: Option<u64>, unfin: Option<Arc<()>>) -> Self {
         let reader = BodyReader::new(bimpl);
         let codec = BufReader::new(BodyCodec::deferred(reader));
         Body {
             codec,
+            length,
             has_read: false,
             char_codec: None,
             content_length: None,
             deadline: Deadline::inert(),
-            unfinished_recs,
+            unfinished_recs: unfin,
         }
     }
+
+    pub(crate) fn length(&self) -> Option<u64> {
+        self.length
+    }
+
     pub(crate) fn configure(
         &mut self,
         deadline: Deadline,
@@ -306,14 +322,16 @@ impl<'a> From<&'a [u8]> for Body {
 
 impl From<Vec<u8>> for Body {
     fn from(bytes: Vec<u8>) -> Self {
+        let len = bytes.len() as u64;
         let cursor = io::Cursor::new(bytes);
-        Body::from_sync_read(cursor)
+        Body::from_sync_read(cursor, Some(len))
     }
 }
 
 impl From<fs::File> for Body {
     fn from(file: fs::File) -> Self {
-        Body::from_sync_read(file)
+        let len = file.metadata().ok().map(|m| m.len());
+        Body::from_sync_read(file, len)
     }
 }
 
