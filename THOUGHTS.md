@@ -61,7 +61,7 @@ let response = http::Request::builder()
 How far can I avoid complicated life times, trait bounds and magical traits in favour of "simple" well knowns types like  `&str`, `&[u8]`. Is there  point in doing so?
 
 ### Single threaded schedulers
-A simple micro services doesn't necessarily need to fire up a multi threaded, work stealing async runtime.
+A simple micro service doing some S3 requests doesn't necessarily need to fire up a multi threaded, work stealing async runtime.
 
 The simplest possible async executors are only about [100 LOC](https://github.com/richardanaya/executor/blob/master/src/lib.rs). But to make a request client library, we need the executor to be connected to an async I/O layer (like [mio](https://crates.io/crates/mio)). That layer makes futures wake up when data arrives on my TcpStream. I believe this is the distinction between an async _executor_ and an async _runtime_.
 
