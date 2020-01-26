@@ -1,5 +1,6 @@
-use crate::body::{Body, BodyImpl};
+use crate::body::BodyImpl;
 use crate::req_ext::RequestParams;
+use crate::Body;
 use crate::Error;
 use bytes::Bytes;
 use futures_util::future::poll_fn;

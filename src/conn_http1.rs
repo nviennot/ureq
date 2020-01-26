@@ -1,6 +1,7 @@
-use crate::body::{Body, BodyImpl};
+use crate::body::BodyImpl;
 use crate::h1::SendRequest;
 use crate::req_ext::RequestParams;
+use crate::Body;
 use crate::Error;
 
 const BUF_SIZE: usize = 16_384;

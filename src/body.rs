@@ -2,7 +2,7 @@ use crate::charset::CharCodec;
 use crate::deadline::Deadline;
 use crate::h1::RecvStream as H1RecvStream;
 use crate::h1::SendRequest as H1SendRequest;
-use crate::req_ext::HeaderMapExt;
+use crate::res_ext::HeaderMapExt;
 use crate::AsyncRead;
 use crate::Error;
 use bytes::Bytes;

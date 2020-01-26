@@ -16,6 +16,7 @@ mod error;
 pub mod h1;
 mod proto;
 mod req_ext;
+mod res_ext;
 mod tls;
 mod tls_pass;
 mod tokio;
@@ -31,7 +32,8 @@ pub use crate::conn::Connection;
 use crate::conn::ProtocolImpl;
 use crate::either::Either;
 use crate::proto::Protocol;
-pub use crate::req_ext::{RequestBuilderExt, RequestExt, ResponseExt};
+pub use crate::req_ext::{RequestBuilderExt, RequestExt};
+pub use crate::res_ext::ResponseExt;
 use crate::tls::wrap_tls;
 use crate::tokio::to_tokio;
 use std::future::Future;
@@ -108,9 +110,8 @@ mod test {
             .expect("Build");
         let body_s: Result<String, Error> = block_on(async {
             let conn = connect::<RustlsTlsConnector>(req.uri()).await?;
-            let res = conn.send_request(req).await?;
-            let (_, mut body) = res.into_parts();
-            body.read_to_string().await
+            let mut res = conn.send_request(req).await?;
+            Ok(res.body_mut().read_to_string().await?)
         });
         println!("{}", body_s?);
         Ok(())
@@ -126,9 +127,8 @@ mod test {
             .expect("Build");
         let body_s: Result<String, Error> = block_on(async {
             let conn = connect::<PassTlsConnector>(req.uri()).await?;
-            let res = conn.send_request(req).await?;
-            let (_, mut body) = res.into_parts();
-            body.read_to_string().await
+            let mut res = conn.send_request(req).await?;
+            Ok(res.body_mut().read_to_string().await?)
         });
         println!("{}", body_s?);
         Ok(())
