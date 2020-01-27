@@ -42,6 +42,7 @@ What are we doing?
   * [ ] character sets
   * [x] gzip
 * [x] Retry logic
+  * [ ] Categorize errors as retryable or not
   * [ ] Back-off?
 * [x] Connection pooling
   * [ ] Connection pool timeout
