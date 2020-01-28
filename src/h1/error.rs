@@ -4,15 +4,19 @@ use std::io;
 #[derive(Debug)]
 pub enum Error {
     Message(String),
-    Static(&'static str),
     Io(io::Error),
     Http11Parser(httparse::Error),
-    HttpApi(http::Error),
+    Http(http::Error),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            Error::Message(v) => write!(f, "{}", v),
+            Error::Io(v) => fmt::Display::fmt(v, f),
+            Error::Http11Parser(v) => write!(f, "http11 parser: {}", v),
+            Error::Http(v) => write!(f, "http api: {}", v),
+        }
     }
 }
 
@@ -43,6 +47,6 @@ impl From<httparse::Error> for Error {
 
 impl From<http::Error> for Error {
     fn from(e: http::Error) -> Self {
-        Error::HttpApi(e)
+        Error::Http(e)
     }
 }

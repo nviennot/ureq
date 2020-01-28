@@ -148,7 +148,7 @@ impl Body {
 
     pub async fn read_to_string(&mut self) -> Result<String, Error> {
         let vec = self.read_to_vec().await?;
-        Ok(String::from_utf8(vec)?)
+        Ok(String::from_utf8_lossy(&vec).into())
     }
 }
 

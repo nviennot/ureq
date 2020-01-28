@@ -303,7 +303,7 @@ impl Inner {
 
     fn assert_can_send_body(&mut self, seq: Seq) -> Option<Error> {
         if self.cur_seq > *seq {
-            return Some(Error::Static("Can't send body for old request"));
+            return Some(Error::Message("Can't send body for old request".into()));
         }
         if self.cur_seq == *seq {
             match self.state {
