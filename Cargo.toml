@@ -9,7 +9,6 @@ default = [
     "tokio",
     "gzip",
     "rustls",
-    "async-std",
     # "tlsapi"
 ]
 async-std = [
