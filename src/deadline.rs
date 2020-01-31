@@ -1,5 +1,5 @@
 use crate::async_impl::never;
-use crate::AsyncImpl;
+use crate::AsyncRuntime;
 use crate::Error;
 use futures_util::future::FutureExt;
 use futures_util::select;
@@ -51,7 +51,7 @@ impl Deadline {
     async fn delay(&self) -> Error {
         if let Some(delay) = self.remaining() {
             if delay > ZERO {
-                AsyncImpl::timeout(delay).await;
+                AsyncRuntime::current().timeout(delay).await;
             }
         } else {
             // never completes

@@ -1,87 +1,160 @@
+use crate::either::Either;
 use crate::Error;
 use crate::Stream;
 use futures_util::future::poll_fn;
 use std::future::Future;
+use std::sync::Mutex;
 use std::task::Poll;
 use std::time::Duration;
 
-// TODO does this cause memory leaks?
-pub async fn never() {
-    poll_fn::<(), _>(|_| Poll::Pending).await;
-    unreachable!()
+use once_cell::sync::Lazy;
+
+static CURRENT_RUNTIME: Lazy<Mutex<AsyncRuntime>> = Lazy::new(|| {
+    if cfg!(feature = "tokio") {
+        #[cfg(feature = "tokio")]
+        return Mutex::new(AsyncRuntime::TokioDefault);
+    } else if cfg!(feature = "async-std") {
+        #[cfg(feature = "async-std")]
+        return Mutex::new(AsyncRuntime::AsyncStd);
+    }
+    panic!("No default async runtime. Use cargo feature 'async-std' or 'tokio'");
+});
+
+#[derive(Clone, Copy)]
+pub enum AsyncRuntime {
+    #[cfg(feature = "async-std")]
+    AsyncStd,
+    #[cfg(feature = "tokio")]
+    TokioDefault,
+    #[cfg(feature = "tokio")]
+    TokioShared,
 }
 
-#[cfg(feature = "async-std")]
-pub mod exec {
-    use super::*;
-    use async_std_lib::net::TcpStream;
-    use async_std_lib::task;
+impl AsyncRuntime {
+    pub fn set_default(rt: Self) {
+        let mut ptr = CURRENT_RUNTIME.lock().unwrap();
+        *ptr = rt;
+    }
 
-    pub struct AsyncImpl;
+    pub(crate) fn current() -> Self {
+        *CURRENT_RUNTIME.lock().unwrap()
+    }
 
-    impl Stream for TcpStream {}
-
-    impl AsyncImpl {
-        pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
-            Ok(TcpStream::connect(addr).await?)
+    pub(crate) async fn connect_tcp(self, addr: &str) -> Result<impl Stream, Error> {
+        match self {
+            #[cfg(feature = "async-std")]
+            AsyncRuntime::AsyncStd => Ok(Either::A(async_std::connect_tcp(addr).await?)),
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioDefault => Ok(Either::B(async_tokio::connect_tcp(addr).await?)),
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioShared => Ok(Either::B(async_tokio::connect_tcp(addr).await?)),
         }
+    }
 
-        pub fn spawn<T>(task: T)
-        where
-            T: Future + Send + 'static,
-        {
-            async_std_lib::task::spawn(async move {
-                task.await;
-            });
+    pub(crate) async fn timeout(self, duration: Duration) {
+        match self {
+            #[cfg(feature = "async-std")]
+            AsyncRuntime::AsyncStd => async_std::timeout(duration).await,
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioDefault => async_tokio::timeout(duration).await,
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioShared => async_tokio::timeout(duration).await,
         }
+    }
 
-        pub async fn timeout(duration: Duration) {
-            async_std_lib::future::timeout(duration, never()).await.ok();
+    pub(crate) fn spawn<T: Future + Send + 'static>(self, task: T) {
+        match self {
+            #[cfg(feature = "async-std")]
+            AsyncRuntime::AsyncStd => async_std::spawn(task),
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioDefault => async_tokio::default_spawn(task),
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioShared => {
+                async_tokio::Handle::current().spawn(async move {
+                    task.await;
+                });
+            }
         }
+    }
 
-        pub fn block_on<F: Future>(future: F) -> F::Output {
-            task::block_on(future)
+    pub(crate) fn block_on<F: Future>(self, future: F) -> F::Output {
+        match self {
+            #[cfg(feature = "async-std")]
+            AsyncRuntime::AsyncStd => async_std::block_on(future),
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioDefault => async_tokio::default_block_on(future),
+            #[cfg(feature = "tokio")]
+            AsyncRuntime::TokioShared => {
+                panic!("Blocking is not possible with a shared tokio runtime")
+            }
         }
     }
 }
 
-#[cfg(all(feature = "tokio", not(feature = "async-std")))]
-pub mod exec {
+#[cfg(feature = "async-std")]
+pub mod async_std {
+    use super::*;
+    use async_std_lib::net::TcpStream;
+    use async_std_lib::task;
+
+    impl Stream for TcpStream {}
+
+    pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
+        Ok(TcpStream::connect(addr).await?)
+    }
+
+    pub fn spawn<T>(task: T)
+    where
+        T: Future + Send + 'static,
+    {
+        async_std_lib::task::spawn(async move {
+            task.await;
+        });
+    }
+
+    pub async fn timeout(duration: Duration) {
+        async_std_lib::future::timeout(duration, never()).await.ok();
+    }
+
+    pub fn block_on<F: Future>(future: F) -> F::Output {
+        task::block_on(future)
+    }
+}
+
+#[cfg(feature = "tokio")]
+pub mod async_tokio {
     use super::*;
     use crate::tokio::from_tokio;
     use once_cell::sync::OnceCell;
     use std::sync::Mutex;
     use tokio_lib::net::TcpStream;
-    use tokio_lib::runtime::{Builder, Handle, Runtime};
+    pub use tokio_lib::runtime::Handle;
+    use tokio_lib::runtime::{Builder, Runtime};
 
     static RUNTIME: OnceCell<Mutex<Runtime>> = OnceCell::new();
     static HANDLE: OnceCell<Handle> = OnceCell::new();
 
-    pub struct AsyncImpl;
+    pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
+        Ok(from_tokio(TcpStream::connect(addr).await?))
+    }
 
-    impl AsyncImpl {
-        pub async fn connect_tcp(addr: &str) -> Result<impl Stream, Error> {
-            Ok(from_tokio(TcpStream::connect(addr).await?))
-        }
+    pub async fn timeout(duration: Duration) {
+        tokio_lib::time::delay_for(duration).await;
+    }
 
-        pub async fn timeout(duration: Duration) {
-            tokio_lib::time::delay_for(duration).await;
-        }
-
-        pub fn spawn<T>(task: T)
-        where
-            T: Future + Send + 'static,
-        {
-            with_handle(|h| {
-                h.spawn(async move {
-                    task.await;
-                });
+    pub fn default_spawn<T>(task: T)
+    where
+        T: Future + Send + 'static,
+    {
+        with_handle(|h| {
+            h.spawn(async move {
+                task.await;
             });
-        }
+        });
+    }
 
-        pub fn block_on<F: Future>(future: F) -> F::Output {
-            with_runtime(|rt| rt.block_on(future))
-        }
+    pub fn default_block_on<F: Future>(future: F) -> F::Output {
+        with_runtime(|rt| rt.block_on(future))
     }
 
     fn create_default_runtime() -> (Handle, Runtime) {
@@ -119,4 +192,10 @@ pub mod exec {
         };
         f(h)
     }
+}
+
+// TODO does this cause memory leaks?
+pub async fn never() {
+    poll_fn::<(), _>(|_| Poll::Pending).await;
+    unreachable!()
 }

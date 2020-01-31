@@ -26,6 +26,7 @@ mod uri_ext;
 pub(crate) use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
 
 pub use crate::agent::Agent;
+pub use crate::async_impl::AsyncRuntime;
 pub use crate::body::Body;
 pub use crate::conn::Connection;
 pub use crate::error::Error;
@@ -38,7 +39,6 @@ pub mod prelude {
     pub use http::{Request, Response};
 }
 
-use crate::async_impl::exec::AsyncImpl;
 use crate::conn::ProtocolImpl;
 use crate::either::Either;
 use crate::proto::Protocol;
@@ -59,7 +59,7 @@ pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, E
 
     let (stream, alpn_proto) = {
         // "raw" tcp
-        let tcp = AsyncImpl::connect_tcp(&addr).await?;
+        let tcp = AsyncRuntime::current().connect_tcp(&addr).await?;
 
         if hostport.is_tls() {
             // wrap in tls
@@ -82,7 +82,7 @@ pub async fn open_stream(
     if proto == Protocol::Http2 {
         let (h2, h2conn) = h2::client::handshake(to_tokio(stream)).await?;
         // drives the connection independently of the h2 api surface.
-        AsyncImpl::spawn(async {
+        AsyncRuntime::current().spawn(async {
             if let Err(err) = h2conn.await {
                 // this is expected to happen when the connection disconnects
                 trace!("Error in connection: {:?}", err);
@@ -92,7 +92,7 @@ pub async fn open_stream(
     } else {
         let (h1, h1conn) = h1::handshake(stream);
         // drives the connection independently of the h1 api surface
-        AsyncImpl::spawn(async {
+        AsyncRuntime::current().spawn(async {
             if let Err(err) = h1conn.await {
                 // this is expected to happen when the connection disconnects
                 trace!("Error in connection: {:?}", err);
@@ -110,7 +110,7 @@ pub trait BlockExt {
 
 impl<F: Future> BlockExt for F {
     fn block(self) -> F::Output {
-        AsyncImpl::block_on(self)
+        AsyncRuntime::current().block_on(self)
     }
 }
 
