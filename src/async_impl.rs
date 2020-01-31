@@ -1,4 +1,3 @@
-use crate::either::Either;
 use crate::Error;
 use crate::Stream;
 use futures_util::future::poll_fn;
@@ -41,13 +40,23 @@ impl AsyncRuntime {
     }
 
     pub(crate) async fn connect_tcp(self, addr: &str) -> Result<impl Stream, Error> {
+        #[cfg(all(feature = "async-std", feature = "tokio"))]
+        {
+            use crate::either::Either;
+            match self {
+                AsyncRuntime::AsyncStd => Ok(Either::A(async_std::connect_tcp(addr).await?)),
+                AsyncRuntime::TokioDefault => Ok(Either::B(async_tokio::connect_tcp(addr).await?)),
+                AsyncRuntime::TokioShared => Ok(Either::B(async_tokio::connect_tcp(addr).await?)),
+            }
+        }
+        #[cfg(all(feature = "async-std", not(feature = "tokio")))]
         match self {
-            #[cfg(feature = "async-std")]
-            AsyncRuntime::AsyncStd => Ok(Either::A(async_std::connect_tcp(addr).await?)),
-            #[cfg(feature = "tokio")]
-            AsyncRuntime::TokioDefault => Ok(Either::B(async_tokio::connect_tcp(addr).await?)),
-            #[cfg(feature = "tokio")]
-            AsyncRuntime::TokioShared => Ok(Either::B(async_tokio::connect_tcp(addr).await?)),
+            AsyncRuntime::AsyncStd => Ok(async_std::connect_tcp(addr).await?),
+        }
+        #[cfg(all(feature = "tokio", not(feature = "async-std")))]
+        match self {
+            AsyncRuntime::TokioDefault => Ok(async_tokio::connect_tcp(addr).await?),
+            AsyncRuntime::TokioShared => Ok(async_tokio::connect_tcp(addr).await?),
         }
     }
 
