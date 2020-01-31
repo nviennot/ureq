@@ -23,6 +23,9 @@ mod tls_pass;
 mod tokio;
 mod uri_ext;
 
+#[cfg(test)]
+mod test;
+
 pub(crate) use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
 
 pub use crate::agent::Agent;
@@ -111,39 +114,5 @@ pub trait BlockExt {
 impl<F: Future> BlockExt for F {
     fn block(self) -> F::Output {
         AsyncRuntime::current().block_on(self)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::prelude::*;
-    use super::Error;
-    use std::time::Duration;
-
-    #[test]
-    fn test_tls() -> Result<(), Error> {
-        let mut res = http::Request::builder()
-            .uri("https://lookback.io")
-            .query("foo", "bar")
-            .header("accept-encoding", "gzip")
-            .timeout(Duration::from_millis(1000))
-            .send(())
-            .block()?;
-        let body_s = res.body_mut().read_to_string().block()?;
-        println!("{}", body_s);
-        Ok(())
-    }
-
-    #[test]
-    fn test_no_tls() -> Result<(), Error> {
-        let mut res = http::Request::builder()
-            .uri("http://www.google.com")
-            .header("accept-encoding", "gzip")
-            .timeout(Duration::from_millis(1000))
-            .send(())
-            .block()?;
-        let body_s = res.body_mut().read_to_string().block()?;
-        println!("{}", body_s);
-        Ok(())
     }
 }
