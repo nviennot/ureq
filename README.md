@@ -18,8 +18,8 @@ What are we doing?
 - [x] Wrap socket in SSL (tls-api)
 - [x] Talk http1 (write own h1, httparse)
 - [x] Talk http2 (h2)
-- [ ] Sniff default tokio runtime?
-- [ ] Set tokio Runtime
+- [x] Sniff default tokio runtime?
+- [x] Set tokio Runtime
 - [x] Explore http::Request extension mechanic
 - Ergonomic RequestExt
   - [x] Query parameters
