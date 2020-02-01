@@ -1,12 +1,20 @@
 struct SimpleLogger;
 
+use once_cell::sync::Lazy;
+
+static TEST_LOG_ENABLED: Lazy<bool> = Lazy::new(|| {
+    std::env::var("TEST_LOG")
+        .map(|v| v != "0" && v != "false")
+        .unwrap_or(false)
+});
+
 impl ::log::Log for SimpleLogger {
     fn enabled(&self, metadata: &::log::Metadata) -> bool {
         metadata.target().starts_with("ureq")
     }
 
     fn log(&self, record: &::log::Record) {
-        if self.enabled(record.metadata()) {
+        if *TEST_LOG_ENABLED && self.enabled(record.metadata()) {
             println!("{} {}", record.level(), record.args());
         }
     }

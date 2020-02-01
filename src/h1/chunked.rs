@@ -116,6 +116,12 @@ impl ChunkedDecoder {
                 || c == 'd'
                 || c == 'e'
                 || c == 'f'
+                || c == 'A'
+                || c == 'B'
+                || c == 'C'
+                || c == 'D'
+                || c == 'E'
+                || c == 'F'
             {
                 // good
             } else {

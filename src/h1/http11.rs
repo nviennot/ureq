@@ -11,7 +11,15 @@ use std::io::Write;
 pub fn write_http11_req<X>(req: &http::Request<X>, buf: &mut [u8]) -> Result<usize, Error> {
     // Write http request into a buffer
     let mut w = io::Cursor::new(buf);
-    write!(w, "{} {} HTTP/1.1\r\n", req.method(), req.uri().path())?;
+
+    // Path and query
+    let pq = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or("/");
+
+    write!(w, "{} {} HTTP/1.1\r\n", req.method(), pq)?;
 
     let mut host = None;
     for (name, value) in req.headers() {

@@ -6,7 +6,7 @@ edition = "2018"
 
 [features]
 default = [
-    "tokio",
+    "async-std",
     "gzip",
     "rustls",
     # "tlsapi"
@@ -55,3 +55,7 @@ flate2 = { version = "*", default-features = false, features = [], optional = tr
 
 ## rustls
 tls-api-rustls = { version = "*", optional = true }
+
+[dev-dependencies]
+tide = "0.6.0"
+async-std-lib = { package = "async-std", version = "*", features = ["unstable"] }

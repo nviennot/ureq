@@ -11,7 +11,6 @@ mod conn;
 mod conn_http1;
 mod conn_http2;
 mod deadline;
-mod dlog;
 mod either;
 mod error;
 pub mod h1;
@@ -23,7 +22,7 @@ mod tls_pass;
 mod tokio;
 mod uri_ext;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "async-std"))]
 mod test;
 
 pub(crate) use futures_io::{AsyncBufRead, AsyncRead, AsyncWrite};
@@ -55,7 +54,6 @@ pub trait Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static {}
 impl Stream for Box<dyn Stream> {}
 
 pub async fn connect<Tls: TlsConnector>(uri: &http::Uri) -> Result<Connection, Error> {
-    crate::dlog::set_logger();
     let hostport = uri.host_port()?;
     // "host:port"
     let addr = hostport.to_string();
