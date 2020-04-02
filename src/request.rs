@@ -46,6 +46,7 @@ pub struct Request {
     pub(crate) timeout_write: u64,
     pub(crate) redirects: u32,
     pub(crate) proxy: Option<crate::proxy::Proxy>,
+    pub(crate) buf_size: Option<usize>,
 }
 
 impl ::std::fmt::Debug for Request {
@@ -197,6 +198,24 @@ impl Request {
     /// ```
     pub fn send(&mut self, reader: impl Read + 'static) -> Response {
         self.do_call(Payload::Reader(Box::new(reader)))
+    }
+
+
+    /// Set the buffer size used when consuming the reader of `send()`.
+    ///
+    /// ```
+    /// use std::io::Cursor;
+    ///
+    /// let text = "Hello there!\n";
+    /// let read = Cursor::new(text.to_string().into_bytes());
+    ///
+    /// let resp = ureq::post("/somewhere")
+    ///     .buf_size(128*1024)
+    ///     .send(read);
+    /// ```
+    pub fn buf_size(&mut self, value: usize) -> &mut Request {
+        self.buf_size = Some(value);
+        self
     }
 
     /// Set a header field.

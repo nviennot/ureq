@@ -138,7 +138,7 @@ pub(crate) fn connect(
     }
 
     // send the body (which can be empty now depending on redirects)
-    let body_bytes_sent = body::send_body(body, unit.is_chunked, &mut stream)?;
+    let body_bytes_sent = body::send_body(body, unit.is_chunked, &mut stream, req.buf_size)?;
 
     // start reading the response to process cookies and redirects.
     let mut resp = Response::from_read(&mut stream);
