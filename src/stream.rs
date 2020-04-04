@@ -137,9 +137,8 @@ pub(crate) fn connect_https(unit: &Unit) -> Result<Stream, Error> {
     lazy_static! {
         static ref TLS_CONF: Arc<rustls::ClientConfig> = {
             let mut config = rustls::ClientConfig::new();
-            config
-                .root_store
-                .add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
+            config.root_store = rustls_native_certs::load_native_certs()
+                .expect("Could not load patform certs");
             Arc::new(config)
         };
     }
